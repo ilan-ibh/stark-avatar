@@ -1,15 +1,10 @@
 /**
  * Vercel serverless function — generates a signed WebSocket URL
  * for the ElevenLabs conversational agent.
- * 
- * API key stays server-side, never exposed to the client.
+ *
+ * The API key stays server-side and is never exposed to the client.
  */
 export default async function handler(req, res) {
-  // CORS headers for local dev
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -22,7 +17,7 @@ export default async function handler(req, res) {
   const apiKey = process.env.ELEVENLABS_API_KEY;
 
   if (!agentId || !apiKey) {
-    return res.status(500).json({ error: 'Missing ElevenLabs configuration' });
+    return res.status(500).json({ error: 'Server is missing ElevenLabs configuration' });
   }
 
   try {
@@ -30,16 +25,14 @@ export default async function handler(req, res) {
       `https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${agentId}`,
       {
         method: 'GET',
-        headers: {
-          'xi-api-key': apiKey,
-        },
-      }
+        headers: { 'xi-api-key': apiKey },
+      },
     );
 
     if (!response.ok) {
-      const body = await response.text();
-      console.error('ElevenLabs API error:', response.status, body);
-      return res.status(response.status).json({ error: 'Failed to get signed URL' });
+      const body = await response.text().catch(() => '');
+      console.error(`ElevenLabs API error (${response.status}):`, body);
+      return res.status(502).json({ error: 'Upstream API error' });
     }
 
     const data = await response.json();

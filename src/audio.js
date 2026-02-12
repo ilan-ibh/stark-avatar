@@ -1,58 +1,57 @@
 import { Conversation } from '@elevenlabs/client';
 
 /**
- * AudioManager — bridges ElevenLabs Conversational AI with the orb visualization.
- * 
- * Handles:
- * - Starting/stopping ElevenLabs agent conversations
- * - Extracting real-time FFT data from agent output audio + mic input audio
- * - Translating agent mode changes into orb state transitions
- * - Providing smoothed audio bands (bass/mid/treble) for the shader
+ * Bridges ElevenLabs Conversational AI with the orb visualization.
+ *
+ * - Manages agent conversation lifecycle (connect / disconnect)
+ * - Extracts real-time FFT frequency bands from agent output + mic input
+ * - Provides smoothed bass / mid / treble values for the shader each frame
+ * - Offers a simulated-audio mode for offline demos
  */
 export class AudioManager {
   constructor() {
-    /** @type {import('@elevenlabs/client').Conversation | null} */
+    /** @type {Conversation | null} */
     this.conversation = null;
     this.isActive = false;
     this.isConnecting = false;
 
-    // Smoothed audio levels (0-1)
+    // Smoothed audio levels (0–1)
     this.level = 0.0;
     this.bass = 0.0;
     this.mid = 0.0;
     this.treble = 0.0;
 
-    // Raw values before smoothing
-    this._rawLevel = 0.0;
-    this._rawBass = 0.0;
-    this._rawMid = 0.0;
-    this._rawTreble = 0.0;
-
     // Current agent mode: 'speaking' | 'listening' | null
     this.agentMode = null;
 
-    // Callbacks set by main.js
+    // Callbacks (set by consumer)
     this.onModeChange = null;
     this.onStatusChange = null;
     this.onMessage = null;
     this.onError = null;
 
-    // Fallback simulation
+    // ── Private ──
+    this._rawLevel = 0.0;
+    this._rawBass = 0.0;
+    this._rawMid = 0.0;
+    this._rawTreble = 0.0;
     this._simulated = false;
     this._simTime = 0;
   }
 
-  /**
-   * Start a conversation with the ElevenLabs agent.
-   */
+  // ─── Public API ──────────────────────────────────────────
+
+  /** Start a conversation with the ElevenLabs agent. */
   async startConversation() {
     if (this.isActive || this.isConnecting) return;
     this.isConnecting = true;
 
     try {
-      // Get signed URL from our serverless API
       const resp = await fetch('/api/signed-url');
-      if (!resp.ok) throw new Error(`Signed URL failed: ${resp.status}`);
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => '');
+        throw new Error(`Signed-URL request failed (${resp.status}): ${body}`);
+      }
       const { signed_url } = await resp.json();
 
       this.conversation = await Conversation.startSession({
@@ -60,48 +59,39 @@ export class AudioManager {
         connectionType: 'websocket',
 
         onConnect: () => {
-          console.log('[STARK] ElevenLabs agent connected');
           this.isActive = true;
           this.isConnecting = false;
           this._simulated = false;
-          if (this.onStatusChange) this.onStatusChange('connected');
+          this.onStatusChange?.('connected');
         },
 
         onDisconnect: () => {
-          console.log('[STARK] ElevenLabs agent disconnected');
           this.isActive = false;
           this.agentMode = null;
-          if (this.onStatusChange) this.onStatusChange('disconnected');
+          this.onStatusChange?.('disconnected');
         },
 
         onModeChange: ({ mode }) => {
-          // mode is 'speaking' or 'listening'
           this.agentMode = mode;
-          console.log(`[STARK] Agent mode: ${mode}`);
-          if (this.onModeChange) this.onModeChange(mode);
+          this.onModeChange?.(mode);
         },
 
         onMessage: (message) => {
-          if (this.onMessage) this.onMessage(message);
+          this.onMessage?.(message);
         },
 
         onError: (error) => {
-          console.error('[STARK] Agent error:', error);
-          if (this.onError) this.onError(error);
+          console.error('[stark] agent error:', error);
+          this.onError?.(error);
         },
       });
-
     } catch (err) {
-      console.error('[STARK] Failed to start conversation:', err);
       this.isConnecting = false;
-      // Rethrow so caller can handle
       throw err;
     }
   }
 
-  /**
-   * End the current conversation.
-   */
+  /** End the current conversation. */
   async stopConversation() {
     if (this.conversation) {
       await this.conversation.endSession();
@@ -114,86 +104,30 @@ export class AudioManager {
   }
 
   /**
-   * Extract frequency bands from a Uint8Array of FFT data.
+   * Enable or disable simulated speech audio (for offline demos).
+   * When enabled the orb reacts to synthetic syllable patterns.
    */
-  _extractBands(data) {
-    if (!data || data.length === 0) return { bass: 0, mid: 0, treble: 0, level: 0 };
-
-    const len = data.length;
-    let bassSum = 0, midSum = 0, trebleSum = 0;
-    const bassEnd = Math.floor(len * 0.08);
-    const midEnd = Math.floor(len * 0.35);
-    const trebleEnd = Math.floor(len * 0.7);
-
-    for (let i = 0; i < bassEnd; i++) {
-      const v = data[i] / 255;
-      bassSum += v * v;
-    }
-    for (let i = bassEnd; i < midEnd; i++) {
-      const v = data[i] / 255;
-      midSum += v * v;
-    }
-    for (let i = midEnd; i < trebleEnd; i++) {
-      const v = data[i] / 255;
-      trebleSum += v * v;
-    }
-
-    const bass = Math.sqrt(bassSum / Math.max(bassEnd, 1));
-    const mid = Math.sqrt(midSum / Math.max(midEnd - bassEnd, 1));
-    const treble = Math.sqrt(trebleSum / Math.max(trebleEnd - midEnd, 1));
-    const level = bass * 0.5 + mid * 0.35 + treble * 0.15;
-
-    return { bass, mid, treble, level };
+  setSimulated(enabled) {
+    this._simulated = enabled;
+    if (!enabled) this._simTime = 0;
   }
 
-  /**
-   * Update per frame. Extracts real-time audio data from the ElevenLabs conversation.
-   */
+  /** Whether simulated audio is currently active. */
+  get simulated() {
+    return this._simulated;
+  }
+
+  // ─── Per-Frame Update ────────────────────────────────────
+
+  /** Call once per animation frame with the delta time in seconds. */
   update(dt) {
-    // Handle simulated audio (for offline/demo speaking state)
     if (this._simulated) {
-      this._simTime += dt;
-      const t = this._simTime;
-      const syllable = Math.max(0, Math.sin(t * 9.0)) * Math.max(0, Math.sin(t * 3.1));
-      const breath = Math.max(0, Math.sin(t * 1.1)) * 0.5 + 0.5;
-      const emphasis = Math.max(0, Math.sin(t * 0.7)) * 0.3 + 0.7;
-
-      this._rawBass = Math.max(0, Math.min(1, syllable * breath * emphasis * 0.85 + Math.sin(t * 2.0) * 0.1 + 0.08));
-      this._rawMid = Math.max(0, Math.min(1, syllable * breath * 0.7 + Math.abs(Math.sin(t * 7.3)) * 0.15));
-      this._rawTreble = Math.max(0, Math.min(1, Math.pow(syllable, 2.0) * 0.5 + Math.abs(Math.sin(t * 13.7)) * 0.1 * syllable));
-      this._rawLevel = this._rawBass * 0.5 + this._rawMid * 0.35 + this._rawTreble * 0.15;
-    }
-    // Extract real audio data from ElevenLabs conversation
-    else if (this.isActive && this.conversation) {
-      try {
-        if (this.agentMode === 'speaking') {
-          // Use the agent's output audio FFT
-          const outputData = this.conversation.getOutputByteFrequencyData();
-          if (outputData && outputData.length > 0) {
-            const bands = this._extractBands(outputData);
-            this._rawBass = bands.bass;
-            this._rawMid = bands.mid;
-            this._rawTreble = bands.treble;
-            this._rawLevel = bands.level;
-          }
-        } else if (this.agentMode === 'listening') {
-          // Use the mic input audio FFT
-          const inputData = this.conversation.getInputByteFrequencyData();
-          if (inputData && inputData.length > 0) {
-            const bands = this._extractBands(inputData);
-            // Listening is subtler — scale down
-            this._rawBass = bands.bass * 0.4;
-            this._rawMid = bands.mid * 0.4;
-            this._rawTreble = bands.treble * 0.3;
-            this._rawLevel = bands.level * 0.4;
-          }
-        }
-      } catch (e) {
-        // getOutputByteFrequencyData may not be available in all modes
-      }
+      this._updateSimulated(dt);
+    } else if (this.isActive && this.conversation) {
+      this._updateFromConversation();
     }
 
-    // Decay when inactive
+    // Decay when nothing is driving audio
     if (!this.isActive && !this._simulated) {
       const decay = 0.93;
       this._rawBass *= decay;
@@ -202,10 +136,82 @@ export class AudioManager {
       this._rawLevel *= decay;
     }
 
-    // Smooth all channels
+    // Smooth all channels (different rates per band for character)
     this.bass += (this._rawBass - this.bass) * 0.14;
     this.mid += (this._rawMid - this.mid) * 0.20;
     this.treble += (this._rawTreble - this.treble) * 0.28;
     this.level += (this._rawLevel - this.level) * 0.16;
   }
+
+  // ─── Private Helpers ─────────────────────────────────────
+
+  /** Synthetic speech-like audio for design validation. */
+  _updateSimulated(dt) {
+    this._simTime += dt;
+    const t = this._simTime;
+
+    const syllable = Math.max(0, Math.sin(t * 9.0)) * Math.max(0, Math.sin(t * 3.1));
+    const breath = Math.max(0, Math.sin(t * 1.1)) * 0.5 + 0.5;
+    const emphasis = Math.max(0, Math.sin(t * 0.7)) * 0.3 + 0.7;
+
+    this._rawBass = clamp01(syllable * breath * emphasis * 0.85 + Math.sin(t * 2.0) * 0.1 + 0.08);
+    this._rawMid = clamp01(syllable * breath * 0.7 + Math.abs(Math.sin(t * 7.3)) * 0.15);
+    this._rawTreble = clamp01(syllable ** 2 * 0.5 + Math.abs(Math.sin(t * 13.7)) * 0.1 * syllable);
+    this._rawLevel = this._rawBass * 0.5 + this._rawMid * 0.35 + this._rawTreble * 0.15;
+  }
+
+  /** Pull real FFT data from the ElevenLabs conversation. */
+  _updateFromConversation() {
+    try {
+      const data =
+        this.agentMode === 'speaking'
+          ? this.conversation.getOutputByteFrequencyData()
+          : this.agentMode === 'listening'
+            ? this.conversation.getInputByteFrequencyData()
+            : null;
+
+      if (!data || data.length === 0) return;
+
+      const bands = extractBands(data);
+      const scale = this.agentMode === 'listening' ? 0.4 : 1.0;
+
+      this._rawBass = bands.bass * scale;
+      this._rawMid = bands.mid * scale;
+      this._rawTreble = bands.treble * (this.agentMode === 'listening' ? 0.3 : 1.0);
+      this._rawLevel = bands.level * scale;
+    } catch {
+      // FFT methods may be unavailable during mode transitions
+    }
+  }
+}
+
+// ─── Utilities ───────────────────────────────────────────────
+
+function clamp01(v) {
+  return Math.max(0, Math.min(1, v));
+}
+
+/**
+ * Split a Uint8Array of FFT bin data into bass / mid / treble RMS values.
+ */
+function extractBands(data) {
+  const len = data.length;
+  const bassEnd = Math.floor(len * 0.08);
+  const midEnd = Math.floor(len * 0.35);
+  const trebleEnd = Math.floor(len * 0.7);
+
+  let bassSum = 0;
+  let midSum = 0;
+  let trebleSum = 0;
+
+  for (let i = 0; i < bassEnd; i++) { const v = data[i] / 255; bassSum += v * v; }
+  for (let i = bassEnd; i < midEnd; i++) { const v = data[i] / 255; midSum += v * v; }
+  for (let i = midEnd; i < trebleEnd; i++) { const v = data[i] / 255; trebleSum += v * v; }
+
+  const bass = Math.sqrt(bassSum / Math.max(bassEnd, 1));
+  const mid = Math.sqrt(midSum / Math.max(midEnd - bassEnd, 1));
+  const treble = Math.sqrt(trebleSum / Math.max(trebleEnd - midEnd, 1));
+  const level = bass * 0.5 + mid * 0.35 + treble * 0.15;
+
+  return { bass, mid, treble, level };
 }

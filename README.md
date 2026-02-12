@@ -78,7 +78,6 @@ stark-avatar/
 │   ├── particles.js        # Two-layer particle system
 │   ├── states.js           # State machine with lerped transitions
 │   ├── audio.js            # ElevenLabs SDK + FFT band extraction
-│   ├── ws.js               # WebSocket client (for external control)
 │   └── shaders/
 │       ├── orb.vert        # Vertex: FBM noise, audio waves, breathing
 │       └── orb.frag        # Fragment: fresnel, veins, spectral shift
@@ -100,12 +99,20 @@ npm run dev
 npm run build
 ```
 
-### Environment Variables (Vercel)
+### Environment Variables
+
+Copy `.env.example` to `.env` and fill in your values:
+
+```bash
+cp .env.example .env
+```
 
 ```
 ELEVENLABS_API_KEY=your_elevenlabs_api_key
 ELEVENLABS_AGENT_ID=your_agent_id
 ```
+
+For production, set these in your Vercel project under Settings > Environment Variables.
 
 ## Controls
 
@@ -123,7 +130,7 @@ ELEVENLABS_AGENT_ID=your_agent_id
 The architecture is designed for plugging in different AI backends. The orb doesn't care what generates the text — it reacts to audio and mode changes from the ElevenLabs SDK. Swap the LLM behind ElevenLabs (via their [Custom LLM](https://elevenlabs.io/docs/eleven-agents/customization/llm/custom-llm) feature) and the orb just works.
 
 Planned:
-- OpenClaw agent integration (custom LLM proxy with buffer words for Opus latency)
+- Custom LLM backend via ElevenLabs [Custom LLM](https://elevenlabs.io/docs/eleven-agents/customization/llm/custom-llm) (use any model as the brain)
 - Audio waveform ring around the orb during speech
 - Agent response text floating near the orb
 - Notification particle bursts
