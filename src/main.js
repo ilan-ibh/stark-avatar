@@ -172,15 +172,19 @@ function hideCaption() {
   captionLabelEl.textContent = '';
 }
 
+// Caption handler — logs message structure for debugging, then displays
 audioManager.onMessage = (message) => {
   try {
-    const type = message?.type;
-    const text = message?.message;
+    console.log('[stark] onMessage:', JSON.stringify(message)?.slice(0, 200));
+
+    // Handle both possible formats: { type, message } or { source, message }
+    const type = message?.type || message?.source;
+    const text = message?.message || (typeof message === 'string' ? message : null);
     if (!text || typeof text !== 'string') return;
 
-    if (type === 'user_transcript') {
+    if (type === 'user_transcript' || type === 'user') {
       showCaption('YOU', text, true);
-    } else if (type === 'agent_response' || type === 'agent_response_correction') {
+    } else if (type === 'agent_response' || type === 'agent_response_correction' || type === 'agent') {
       showCaption('STARK', text, false);
     }
   } catch {
