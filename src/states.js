@@ -18,7 +18,7 @@ const STATE_CONFIGS = {
     scale: 1.0,
     containmentPulse: 0,
     innerGlow: 0.6,
-    bloomStrength: 0.8,
+    bloomStrength: 0.5,
     label: 'idle',
   },
   thinking: {
@@ -32,7 +32,7 @@ const STATE_CONFIGS = {
     scale: 0.93,
     containmentPulse: 0.15,
     innerGlow: 0.9,
-    bloomStrength: 1.0,
+    bloomStrength: 0.6,
     label: 'thinking',
   },
   speaking: {
@@ -46,7 +46,7 @@ const STATE_CONFIGS = {
     scale: 1.05,
     containmentPulse: 0.35,
     innerGlow: 1.2,
-    bloomStrength: 1.0,
+    bloomStrength: 0.7,
     label: 'speaking',
   },
   listening: {
@@ -60,7 +60,7 @@ const STATE_CONFIGS = {
     scale: 1.0,
     containmentPulse: 0.08,
     innerGlow: 0.85,
-    bloomStrength: 0.8,
+    bloomStrength: 0.5,
     label: 'listening',
   },
   alert: {
@@ -74,7 +74,7 @@ const STATE_CONFIGS = {
     scale: 1.12,
     containmentPulse: 0.7,
     innerGlow: 1.8,
-    bloomStrength: 1.3,
+    bloomStrength: 0.9,
     label: 'alert',
   },
 };

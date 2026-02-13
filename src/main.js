@@ -40,9 +40,9 @@ composer.addPass(new RenderPass(scene, camera));
 
 const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(window.innerWidth, window.innerHeight),
-  1.8,   // intensity (matches Lovable's bloom)
-  0.4,   // radius
-  0.1,   // luminance threshold (low — catches more glow)
+  0.6,   // strength (UnrealBloom is much more aggressive than pmndrs Bloom)
+  0.35,  // radius
+  0.3,   // threshold
 );
 composer.addPass(bloomPass);
 composer.addPass(new OutputPass());

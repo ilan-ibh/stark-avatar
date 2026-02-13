@@ -243,20 +243,21 @@ export function updateCore(core, sv, time, audioBands) {
   core.facetedGeo.attributes.color.needsUpdate = true;
   core.facetedGeo.attributes.position.needsUpdate = true;
 
-  // Triple inner glow
-  const hotInt = glow * 3;
+  // Triple inner glow — kept subtle so the faceted shell stays visible
+  const hotInt = glow * 1.5;
   core.innerHotMat.color.setRGB(
-    Math.min(1, c[0] * hotInt + 0.5),
-    Math.min(1, c[1] * hotInt + 0.5),
-    Math.min(1, c[2] * hotInt + 0.4),
+    Math.min(1, c[0] * hotInt + 0.25),
+    Math.min(1, c[1] * hotInt + 0.25),
+    Math.min(1, c[2] * hotInt + 0.2),
   );
-  core.innerHotMat.opacity = 0.5 + glow * 0.15 * seamPulse;
+  core.innerHotMat.opacity = 0.3 + glow * 0.1 * seamPulse;
 
-  core.innerMidMat.color.setRGB(c[0] * glow * 2, c[1] * glow * 2, c[2] * glow * 2);
-  core.innerMidMat.opacity = 0.3 + glow * 0.15;
+  const midInt = glow * 1.0;
+  core.innerMidMat.color.setRGB(c[0] * midInt, c[1] * midInt, c[2] * midInt);
+  core.innerMidMat.opacity = 0.15 + glow * 0.1;
 
-  core.innerSoftMat.color.setRGB(c[0] * glow * 1.2, c[1] * glow * 1.2, c[2] * glow * 1.2);
-  core.innerSoftMat.opacity = 0.15 + glow * 0.1;
+  core.innerSoftMat.color.setRGB(c[0] * glow * 0.6, c[1] * glow * 0.6, c[2] * glow * 0.6);
+  core.innerSoftMat.opacity = 0.08 + glow * 0.06;
 
   // Edge glow
   const edgeInt = intensity * 1.5 * seamPulse;
