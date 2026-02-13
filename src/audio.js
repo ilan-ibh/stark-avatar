@@ -173,12 +173,19 @@ export class AudioManager {
       if (!data || data.length === 0) return;
 
       const bands = extractBands(data);
-      const scale = this.agentMode === 'listening' ? 0.4 : 1.0;
 
-      this._rawBass = bands.bass * scale;
-      this._rawMid = bands.mid * scale;
-      this._rawTreble = bands.treble * (this.agentMode === 'listening' ? 0.3 : 1.0);
-      this._rawLevel = bands.level * scale;
+      if (this.agentMode === 'listening') {
+        // Mic input drives the orb — scale up so user's voice is clearly visible
+        this._rawBass = bands.bass * 0.85;
+        this._rawMid = bands.mid * 0.8;
+        this._rawTreble = bands.treble * 0.6;
+        this._rawLevel = bands.level * 0.8;
+      } else {
+        this._rawBass = bands.bass;
+        this._rawMid = bands.mid;
+        this._rawTreble = bands.treble;
+        this._rawLevel = bands.level;
+      }
     } catch {
       // FFT methods may be unavailable during mode transitions
     }
