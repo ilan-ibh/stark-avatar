@@ -1,14 +1,15 @@
 /**
- * Stark Voice Proxy v8
+ * Stark Voice Proxy v9
  *
  * Bridges ElevenLabs Conversational AI ↔ OpenClaw Gateway.
  *
- * Fixes:
+ * Features:
  *   - Silence filter: "..." and empty messages return [DONE] immediately
  *   - In-flight abort per session: new request aborts previous (handles speculative turn)
  *   - Voice hint: appended to user message to keep responses concise
- *   - Buffer phrase: immediate "thinking" phrase to fill Opus TTFT gap
- *   - Trailing space on buffer per ElevenLabs docs (prevents audio distortion)
+ *   - Contextual buffer: immediate phrase based on what the user asked
+ *   - Contextual keep-alive: periodic phrases during long tool calls
+ *   - Trailing space on all phrases per ElevenLabs docs
  */
 
 import express from "express";
@@ -25,24 +26,78 @@ const OPENCLAW_AGENT = process.env.OPENCLAW_AGENT || "main";
 
 const VOICE_HINT = " [Voice call — keep response under 3-4 sentences]";
 
-// --- Buffer phrases (with trailing space per ElevenLabs docs) ---
-const BUFFER_PHRASES = [
-  "Hmm... ",
-  "Let me think... ",
-  "One sec... ",
-  "Alright... ",
-  "OK... ",
-  "Right... ",
-];
-let lastBufferIdx = -1;
+// --- Contextual buffer phrases (trailing space per ElevenLabs docs) ---
+// Each category has: [initial buffer, ...keep-alive phrases]
+// The initial buffer plays immediately. Keep-alive phrases play every ~10s
+// during long tool calls to keep the connection alive.
 
-function getBufferPhrase() {
+const PHRASE_CATEGORIES = {
+  email: {
+    keywords: ['email', 'inbox', 'mail', 'message', 'unread', 'send an email', 'reply'],
+    initial: ["Let me check your inbox... ", "Pulling up your emails... ", "Let me look at your messages... "],
+    keepAlive: ["Going through your emails... ", "Still reading through them... ", "Almost done checking... "],
+  },
+  calendar: {
+    keywords: ['calendar', 'schedule', 'meeting', 'appointment', 'event', 'free time', 'busy', 'availability'],
+    initial: ["Let me check your schedule... ", "Pulling up your calendar... ", "Looking at your agenda... "],
+    keepAlive: ["Going through your events... ", "Checking the details... ", "One moment, still looking... "],
+  },
+  search: {
+    keywords: ['search', 'look up', 'find', 'google', 'what is', 'who is', 'look for', 'research'],
+    initial: ["Let me look that up... ", "Searching for that... ", "Let me find out... "],
+    keepAlive: ["Still searching... ", "Going through the results... ", "Almost there... "],
+  },
+  code: {
+    keywords: ['code', 'bug', 'error', 'deploy', 'build', 'commit', 'repo', 'pull request', 'github'],
+    initial: ["Let me check on that... ", "Looking into it... ", "Let me pull that up... "],
+    keepAlive: ["Still going through the code... ", "Digging into the details... ", "Almost got it... "],
+  },
+  data: {
+    keywords: ['price', 'stock', 'market', 'trading', 'portfolio', 'crypto', 'bitcoin', 'balance'],
+    initial: ["Let me check the numbers... ", "Pulling up the data... ", "Looking at the latest figures... "],
+    keepAlive: ["Still crunching the numbers... ", "Going through the data... ", "Almost done... "],
+  },
+  file: {
+    keywords: ['file', 'document', 'folder', 'download', 'upload', 'save', 'open', 'read'],
+    initial: ["Let me grab that... ", "Looking for that file... ", "One sec, pulling it up... "],
+    keepAlive: ["Still looking through files... ", "Almost found it... ", "One more moment... "],
+  },
+  memory: {
+    keywords: ['remember', 'last time', 'did i', 'have i', 'history', 'before', 'earlier', 'yesterday'],
+    initial: ["Let me think back... ", "Checking my memory... ", "Let me recall... "],
+    keepAlive: ["Still going through our history... ", "Looking further back... ", "Almost there... "],
+  },
+  fallback: {
+    initial: ["Let me think about that... ", "One sec... ", "Good question... ", "Alright, let me work on that... "],
+    keepAlive: ["Still working on it... ", "Bear with me... ", "Almost there... "],
+  },
+};
+
+function matchCategory(userText) {
+  const lower = userText.toLowerCase();
+  for (const [name, cat] of Object.entries(PHRASE_CATEGORIES)) {
+    if (name === 'fallback') continue;
+    if (cat.keywords.some((kw) => lower.includes(kw))) return cat;
+  }
+  return PHRASE_CATEGORIES.fallback;
+}
+
+let lastInitialIdx = -1;
+
+function getContextualPhrases(userText) {
+  const cat = matchCategory(userText);
+
+  // Pick initial phrase (avoid repeating the last one)
   let idx;
   do {
-    idx = Math.floor(Math.random() * BUFFER_PHRASES.length);
-  } while (idx === lastBufferIdx && BUFFER_PHRASES.length > 1);
-  lastBufferIdx = idx;
-  return BUFFER_PHRASES[idx];
+    idx = Math.floor(Math.random() * cat.initial.length);
+  } while (idx === lastInitialIdx && cat.initial.length > 1);
+  lastInitialIdx = idx;
+
+  return {
+    initial: cat.initial[idx],
+    keepAlive: cat.keepAlive,
+  };
 }
 
 // --- In-flight tracking per session ---
@@ -210,8 +265,9 @@ app.post(
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders(); // Force headers out immediately
 
-    // --- Buffer phrase: flush BEFORE fetch starts ---
-    const buffer = getBufferPhrase();
+    // --- Contextual buffer phrase: flush BEFORE fetch starts ---
+    const phrases = getContextualPhrases(userText);
+    const buffer = phrases.initial;
     res.write(sseChunk(`chatcmpl-buf-${Date.now()}`, buffer));
     if (typeof res.flush === "function") res.flush();
     if (res.socket) res.socket.uncork?.();
@@ -250,14 +306,13 @@ app.post(
       let partial = "";
       let lastChunkTime = Date.now();
 
-      // Keep-alive: send filler chunks every 10s during long tool calls
+      // Keep-alive: send contextual filler every 10s during long tool calls
       // so ElevenLabs doesn't hit the cascade timeout and drop the connection.
       const KEEPALIVE_INTERVAL_MS = 10000;
-      const KEEPALIVE_PHRASES = ["... ", "still working on that... ", "one moment... "];
       let keepAliveIdx = 0;
       const keepAliveTimer = setInterval(() => {
         if (Date.now() - lastChunkTime > KEEPALIVE_INTERVAL_MS - 1000) {
-          const phrase = KEEPALIVE_PHRASES[keepAliveIdx % KEEPALIVE_PHRASES.length];
+          const phrase = phrases.keepAlive[keepAliveIdx % phrases.keepAlive.length];
           keepAliveIdx++;
           res.write(sseChunk(`chatcmpl-keepalive-${Date.now()}`, phrase));
           if (typeof res.flush === "function") res.flush();
@@ -327,7 +382,7 @@ app.post(
 // --- Start ---
 const server = createServer(app);
 server.listen(PORT, () => {
-  console.log(`[stark-proxy] ⚡ v8 — silence filter + abort + buffer + keep-alive`);
+  console.log(`[stark-proxy] ⚡ v9 — contextual buffer + contextual keep-alive`);
   console.log(`[stark-proxy] → ${OPENCLAW_URL}`);
   console.log(`[stark-proxy] Port: ${PORT} | Agent: ${OPENCLAW_AGENT}`);
 });
