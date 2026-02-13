@@ -1,6 +1,6 @@
 /**
- * Vercel serverless function — generates a signed WebSocket URL
- * for the ElevenLabs conversational agent.
+ * Vercel serverless function — generates a conversation token
+ * for the ElevenLabs conversational agent (WebRTC connection).
  *
  * The API key stays server-side and is never exposed to the client.
  */
@@ -22,7 +22,7 @@ export default async function handler(req, res) {
 
   try {
     const response = await fetch(
-      `https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${agentId}`,
+      `https://api.elevenlabs.io/v1/convai/conversation/token?agent_id=${agentId}`,
       {
         method: 'GET',
         headers: { 'xi-api-key': apiKey },
@@ -36,9 +36,9 @@ export default async function handler(req, res) {
     }
 
     const data = await response.json();
-    return res.status(200).json({ signed_url: data.signed_url });
+    return res.status(200).json({ token: data.token });
   } catch (err) {
-    console.error('Signed URL error:', err);
+    console.error('Token error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 }

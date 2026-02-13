@@ -65,19 +65,60 @@ scene.add(particlePoints);
 const stateManager = new StateManager();
 const audioManager = new AudioManager();
 
+// ─── Thinking-Gap Detection ────────────────────────────────
+// When the agent stops speaking and switches to listening, track silence.
+// If mic input stays quiet for >1.2s, transition to "thinking" — the LLM
+// is processing. This fills the dead gap so the user sees
+// listening (cyan) → thinking (purple) → speaking (green) instead of
+// listening → [dead air] → speaking.
+
+let listeningStartTime = 0;
+let thinkingTriggered = false;
+
 audioManager.onModeChange = (mode) => {
-  if (mode === 'speaking' || mode === 'listening') {
-    stateManager.setState(mode);
+  if (mode === 'listening') {
+    listeningStartTime = performance.now();
+    thinkingTriggered = false;
+    stateManager.setState('listening');
+  } else if (mode === 'speaking') {
+    thinkingTriggered = false;
+    stateManager.setState('speaking');
   }
 };
 
+// ─── Auto-Reconnect ───────────────────────────────────────
+let intentionalDisconnect = false;
+let reconnectAttempts = 0;
+const MAX_RECONNECT = 3;
+
 audioManager.onStatusChange = (status) => {
   if (status === 'connected') {
+    reconnectAttempts = 0;
     stateManager.setState('listening');
     updateConnectionUI(true);
   } else if (status === 'disconnected') {
-    stateManager.setState('idle');
     updateConnectionUI(false);
+
+    if (intentionalDisconnect) {
+      intentionalDisconnect = false;
+      stateManager.setState('idle');
+    } else if (reconnectAttempts < MAX_RECONNECT) {
+      // Unexpected drop — auto-reconnect with backoff
+      stateManager.setState('alert');
+      reconnectAttempts++;
+      const delay = Math.min(2000 * Math.pow(2, reconnectAttempts - 1), 8000);
+      setTimeout(async () => {
+        stateManager.setState('thinking');
+        try {
+          await audioManager.startConversation();
+        } catch {
+          stateManager.setState('idle');
+          updateConnectionUI(false);
+        }
+      }, delay);
+    } else {
+      stateManager.setState('idle');
+    }
   }
 };
 
@@ -191,9 +232,12 @@ window.addEventListener('keydown', (e) => {
 
 async function toggleAgent() {
   if (audioManager.isActive) {
+    intentionalDisconnect = true;
+    reconnectAttempts = MAX_RECONNECT; // prevent auto-reconnect
     await audioManager.stopConversation();
     stateManager.setState('idle');
   } else if (!audioManager.isConnecting) {
+    reconnectAttempts = 0;
     stateManager.setState('thinking');
     try {
       await audioManager.startConversation();
@@ -245,6 +289,19 @@ function animate() {
     mid: audioManager.mid,
     treble: audioManager.treble,
   };
+
+  // Thinking-gap: if we've been in 'listening' for >1.2s with low mic input,
+  // the LLM is probably processing — show thinking state
+  if (
+    audioManager.agentMode === 'listening' &&
+    !thinkingTriggered &&
+    listeningStartTime > 0 &&
+    performance.now() - listeningStartTime > 1200 &&
+    audioManager.level < 0.05
+  ) {
+    thinkingTriggered = true;
+    stateManager.setState('thinking');
+  }
 
   updateOrb(orbUniforms, coreUniforms, atmosUniforms, sv, elapsed, audioBands);
 

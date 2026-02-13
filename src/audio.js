@@ -50,13 +50,13 @@ export class AudioManager {
       const resp = await fetch('/api/signed-url');
       if (!resp.ok) {
         const body = await resp.text().catch(() => '');
-        throw new Error(`Signed-URL request failed (${resp.status}): ${body}`);
+        throw new Error(`Token request failed (${resp.status}): ${body}`);
       }
-      const { signed_url } = await resp.json();
+      const { token } = await resp.json();
 
       this.conversation = await Conversation.startSession({
-        signedUrl: signed_url,
-        connectionType: 'websocket',
+        conversationToken: token,
+        connectionType: 'webrtc',
 
         onConnect: () => {
           this.isActive = true;
