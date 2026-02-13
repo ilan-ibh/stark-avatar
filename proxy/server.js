@@ -24,7 +24,7 @@ const OPENCLAW_TOKEN =
   "25b8d60afe0d8fa0141d833affca1b023d45d9f45d174e86";
 const OPENCLAW_AGENT = process.env.OPENCLAW_AGENT || "main";
 
-const VOICE_HINT = " [Voice call — keep response under 3-4 sentences]";
+const VOICE_HINT = " [Voice call — keep response under 3-4 sentences. Do NOT start with filler like 'Let me check' or 'Sure thing' — jump straight to the answer.]";
 
 // --- Contextual buffer phrases (trailing space per ElevenLabs docs) ---
 // Each category has: [initial buffer, ...keep-alive phrases]
@@ -33,7 +33,7 @@ const VOICE_HINT = " [Voice call — keep response under 3-4 sentences]";
 
 const PHRASE_CATEGORIES = {
   email: {
-    keywords: ['email', 'inbox', 'mail', 'message', 'unread', 'send an email', 'reply'],
+    keywords: ['email', 'inbox', 'mail', 'message', 'messages', 'unread', 'send an email', 'reply', 'whatsapp', 'telegram', 'slack', 'discord', 'notification', 'notifications'],
     initial: ["Let me check your inbox... ", "Pulling up your emails... ", "Let me look at your messages... "],
     keepAlive: ["Going through your emails... ", "Still reading through them... ", "Almost done checking... "],
   },
@@ -298,6 +298,30 @@ app.post(
     const start = Date.now();
     let fullContent = buffer || "";
     let firstChunkMs = 0;
+    let lastChunkTime = Date.now();
+    let streamingStarted = false;
+
+    // Keep-alive: starts IMMEDIATELY — fires every 10s during the ENTIRE
+    // request lifecycle including the fetch() wait. This is critical because
+    // tool calls can block the fetch for 20+ seconds. Without this,
+    // ElevenLabs hits its 15s cascade timeout and drops the connection.
+    const KEEPALIVE_INTERVAL_MS = 10000;
+    let keepAliveIdx = 0;
+    const keepAliveTimer = setInterval(() => {
+      if (Date.now() - lastChunkTime > KEEPALIVE_INTERVAL_MS - 1000) {
+        const phrase = phrases.keepAlive[keepAliveIdx % phrases.keepAlive.length];
+        keepAliveIdx++;
+        try {
+          res.write(sseChunk(`chatcmpl-keepalive-${Date.now()}`, phrase));
+          if (typeof res.flush === "function") res.flush();
+          fullContent += phrase;
+          lastChunkTime = Date.now();
+          console.log(`[proxy] keep-alive sent: "${phrase.trim()}"`);
+        } catch {
+          // Response may have been closed
+        }
+      }
+    }, KEEPALIVE_INTERVAL_MS);
 
     try {
       const upstreamRes = await fetch(OPENCLAW_URL, {
@@ -312,6 +336,7 @@ app.post(
       });
 
       if (!upstreamRes.ok) {
+        clearInterval(keepAliveTimer);
         const errText = await upstreamRes.text();
         console.error("[proxy] upstream error:", upstreamRes.status, errText);
         res.write(sseChunk(`chatcmpl-err-${Date.now()}`, "Sorry, having trouble connecting. "));
@@ -321,62 +346,42 @@ app.post(
         return;
       }
 
+      streamingStarted = true;
       const reader = upstreamRes.body.getReader();
       const decoder = new TextDecoder();
       let partial = "";
-      let lastChunkTime = Date.now();
 
-      // Keep-alive: send contextual filler every 10s during long tool calls
-      // so ElevenLabs doesn't hit the cascade timeout and drop the connection.
-      const KEEPALIVE_INTERVAL_MS = 10000;
-      let keepAliveIdx = 0;
-      const keepAliveTimer = setInterval(() => {
-        if (Date.now() - lastChunkTime > KEEPALIVE_INTERVAL_MS - 1000) {
-          const phrase = phrases.keepAlive[keepAliveIdx % phrases.keepAlive.length];
-          keepAliveIdx++;
-          res.write(sseChunk(`chatcmpl-keepalive-${Date.now()}`, phrase));
-          if (typeof res.flush === "function") res.flush();
-          fullContent += phrase;
-          lastChunkTime = Date.now();
-          console.log(`[proxy] keep-alive sent: "${phrase.trim()}"`);
-        }
-      }, KEEPALIVE_INTERVAL_MS);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+        partial += decoder.decode(value, { stream: true });
+        const lines = partial.split("\n");
+        partial = lines.pop() || "";
 
-          partial += decoder.decode(value, { stream: true });
-          const lines = partial.split("\n");
-          partial = lines.pop() || "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith("data: ")) continue;
+          const payload = trimmed.slice(6);
+          if (payload === "[DONE]") continue;
 
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || !trimmed.startsWith("data: ")) continue;
-            const payload = trimmed.slice(6);
-            if (payload === "[DONE]") continue;
-
-            try {
-              const chunk = JSON.parse(payload);
-              const content = chunk.choices?.[0]?.delta?.content;
-              if (content) {
-                if (!firstChunkMs) firstChunkMs = Date.now() - start;
-                fullContent += content;
-                lastChunkTime = Date.now();
-              }
-              // Pipe through verbatim
-              res.write(`data: ${payload}\n\n`);
-            } catch {
-              res.write(`${trimmed}\n\n`);
+          try {
+            const chunk = JSON.parse(payload);
+            const content = chunk.choices?.[0]?.delta?.content;
+            if (content) {
+              if (!firstChunkMs) firstChunkMs = Date.now() - start;
+              fullContent += content;
+              lastChunkTime = Date.now();
             }
+            res.write(`data: ${payload}\n\n`);
+          } catch {
+            res.write(`${trimmed}\n\n`);
           }
         }
-      } finally {
-        clearInterval(keepAliveTimer);
       }
 
-      // Cache for dedup
+      clearInterval(keepAliveTimer);
+
       cacheResponse(reqHash, fullContent);
       logMessage(sessionId, "assistant", fullContent);
       console.log(
@@ -387,13 +392,16 @@ app.post(
       res.end();
       if (inFlight.get(sessionId)?.controller === controller) inFlight.delete(sessionId);
     } catch (err) {
+      clearInterval(keepAliveTimer);
       if (err.name === "AbortError") {
         console.log("[proxy] request aborted (superseded by newer request)");
       } else {
         console.error("[proxy] error:", err.message);
       }
-      res.write("data: [DONE]\n\n");
-      res.end();
+      try {
+        res.write("data: [DONE]\n\n");
+        res.end();
+      } catch {}
       if (inFlight.get(sessionId)?.controller === controller) inFlight.delete(sessionId);
     }
   }
@@ -402,7 +410,7 @@ app.post(
 // --- Start ---
 const server = createServer(app);
 server.listen(PORT, () => {
-  console.log(`[stark-proxy] ⚡ v9 — contextual buffer + contextual keep-alive`);
+  console.log(`[stark-proxy] ⚡ v10 — keep-alive during fetch + no double preamble`);
   console.log(`[stark-proxy] → ${OPENCLAW_URL}`);
   console.log(`[stark-proxy] Port: ${PORT} | Agent: ${OPENCLAW_AGENT}`);
 });
