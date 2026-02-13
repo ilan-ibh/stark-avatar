@@ -424,10 +424,18 @@ app.post(
             const chunk = JSON.parse(payload);
             const content = chunk.choices?.[0]?.delta?.content;
             if (content) {
-              // Hold the first real chunk briefly so TTS finishes the buffer phrase
+              // Hold the first real chunk until the buffer phrase has had time to finish.
+              // Buffer phrases are ~1-2.5s of speech. If the LLM responds fast, wait.
+              // If the LLM is slow (tool calls), the buffer is already done — no delay.
               if (!firstChunkMs) {
                 firstChunkMs = Date.now() - start;
-                if (buffer) await new Promise((r) => setTimeout(r, 800));
+                if (buffer) {
+                  const elapsed = Date.now() - lastChunkTime;
+                  const minBufferTime = 2500;
+                  if (elapsed < minBufferTime) {
+                    await new Promise((r) => setTimeout(r, minBufferTime - elapsed));
+                  }
+                }
               }
               fullContent += content;
               lastChunkTime = Date.now();
