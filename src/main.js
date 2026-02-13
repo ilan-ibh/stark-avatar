@@ -173,17 +173,18 @@ function hideCaption() {
 }
 
 audioManager.onMessage = (message) => {
-  const type = message?.type;
-  const text = message?.message;
-  if (!text) return;
+  try {
+    const type = message?.type;
+    const text = message?.message;
+    if (!text || typeof text !== 'string') return;
 
-  if (type === 'user_transcript') {
-    showCaption('YOU', text, true);
-  } else if (type === 'agent_response') {
-    showCaption('STARK', text, false);
-  } else if (type === 'agent_response_correction') {
-    // Replace the current agent text with the corrected version
-    showCaption('STARK', text, false);
+    if (type === 'user_transcript') {
+      showCaption('YOU', text, true);
+    } else if (type === 'agent_response' || type === 'agent_response_correction') {
+      showCaption('STARK', text, false);
+    }
+  } catch {
+    // Never let caption errors affect the conversation
   }
 };
 
@@ -220,8 +221,8 @@ function updateStatusUI(sv) {
   const rgb = `${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}`;
   statusEl.style.color = `rgba(${rgb}, 0.5)`;
   // Caption text inherits the state color
-  captionLabelEl.style.color = `rgba(${rgb}, 0.4)`;
-  captionTextEl.style.color = `rgba(${rgb}, 0.7)`;
+  if (captionLabelEl) captionLabelEl.style.color = `rgba(${rgb}, 0.4)`;
+  if (captionTextEl) captionTextEl.style.color = `rgba(${rgb}, 0.7)`;
 }
 
 function updateConnectionUI(connected) {
