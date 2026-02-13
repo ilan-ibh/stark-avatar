@@ -14,6 +14,7 @@ import {
 } from './particles.js';
 import { StateManager } from './states.js';
 import { AudioManager } from './audio.js';
+import { SoundManager } from './sound.js';
 
 // ─── Scene ─────────────────────────────────────────────────
 
@@ -68,6 +69,7 @@ scene.add(leadParticles.points);
 
 const stateManager = new StateManager();
 const audioManager = new AudioManager();
+const soundManager = new SoundManager();
 
 // ─── Debounced Mode Handling ──────────────────────────────
 
@@ -100,8 +102,6 @@ function commitMode(mode) {
 }
 
 audioManager.onModeChange = (mode) => {
-  console.log(`[stark] onModeChange: ${mode} (committed: ${committedMode}, thinking: ${thinkingTriggered})`);
-
   // Speaking always commits immediately — no lag on voice start
   if (mode === 'speaking') {
     clearTimeout(modeDebounceTimer);
@@ -282,6 +282,7 @@ window.addEventListener('keydown', (e) => {
     }
     case '3':
       if (isAgentActive()) break;
+      soundManager.init();
       stateManager.setState(stateNames[2]);
       audioManager.setSimulated(true);
       break;
@@ -305,6 +306,11 @@ window.addEventListener('keydown', (e) => {
       toggleDemo();
       break;
 
+    case 'm':
+    case 'M':
+      soundManager.toggleMute();
+      break;
+
     case 'Escape':
       if (controlsVisible) {
         controlsEl.classList.add('hidden');
@@ -317,6 +323,9 @@ window.addEventListener('keydown', (e) => {
 });
 
 async function toggleAgent() {
+  // Init sound on first interaction (browser autoplay policy)
+  soundManager.init();
+
   if (audioManager.isActive) {
     intentionalDisconnect = true;
     await audioManager.stopConversation();
@@ -387,7 +396,7 @@ function animate() {
 
   // Update visual components
   updateCore(core, sv, elapsed, audioBands);
-  updateRings(rings, sv, elapsed, dt);
+  updateRings(rings, sv, elapsed, dt, audioBands);
   updateContainment(containment, sv, elapsed, dt, stateManager);
   updateParticles(particles, sv, elapsed, dt);
   updateLeadParticles(leadParticles, sv, elapsed, dt);
@@ -395,11 +404,21 @@ function animate() {
   // Bloom
   bloomPass.strength = sv.bloomStrength + stateManager.flashIntensity * 2.0;
 
-  // Camera zoom
+  // Micro-zoom pulse during thinking — subtle intensity
+  const thinkingZoomOffset = sv.label === 'thinking'
+    ? Math.sin(elapsed * 4) * 0.12
+    : 0;
+
+  // Subtle camera orbital drift — full orbit ~100 minutes
+  const driftAngle = elapsed * 0.001;
   const lf = 1 - Math.exp(-dt * 5);
-  camera.position.z = THREE.MathUtils.lerp(camera.position.z, targetZoom, lf);
+  camera.position.z = THREE.MathUtils.lerp(camera.position.z, targetZoom + thinkingZoomOffset, lf);
+  camera.position.x = Math.sin(driftAngle) * 0.25;
+  camera.position.y = Math.cos(driftAngle * 0.7) * 0.12;
+  camera.lookAt(0, 0, 0);
 
   updateStatusUI(sv);
+  soundManager.update(sv.label, audioBands);
   composer.render();
 }
 

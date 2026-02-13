@@ -10,23 +10,23 @@ const STATE_CONFIGS = {
   idle: {
     color: [100 / 255, 180 / 255, 255 / 255],       // Ice blue
     coreColor: [40 / 255, 80 / 255, 140 / 255],
-    intensity: 1.0,
+    intensity: 0.6,
     rotationSpeed: 0.15,
     ringSpeed: 0.3,
     particleSpeed: 0.5,
     displacement: 0,
     scale: 1.0,
     containmentPulse: 0,
-    innerGlow: 0.6,
-    bloomStrength: 0.5,
+    innerGlow: 0.35,
+    bloomStrength: 0.4,
     label: 'idle',
   },
   thinking: {
     color: [180 / 255, 160 / 255, 80 / 255],         // Warm gold
     coreColor: [100 / 255, 90 / 255, 30 / 255],
     intensity: 1.4,
-    rotationSpeed: 0.35,
-    ringSpeed: 0.8,
+    rotationSpeed: 0.45,
+    ringSpeed: 1.4,
     particleSpeed: 1.2,
     displacement: 0,
     scale: 0.93,

@@ -180,10 +180,14 @@ export function updateCore(core, sv, time, audioBands) {
   const glow = sv.innerGlow;
   const color = new THREE.Color(c[0], c[1], c[2]);
 
-  // Rotation + scale
+  // Rotation + scale (bass-driven breathing on top of state scale)
   core.group.rotation.y += sv.rotationSpeed * 0.016;
   core.group.rotation.x += sv.rotationSpeed * 0.016 * 0.3;
-  core.group.scale.setScalar(sv.scale);
+  core.group.scale.setScalar(sv.scale + audioBands.bass * 0.04);
+
+  // Ambient Lissajous drift — subtle figure-8 so idle doesn't feel frozen
+  core.group.position.y = Math.sin(time * 0.3) * 0.06;
+  core.group.position.x = Math.sin(time * 0.2) * 0.04;
 
   // Seam pulse
   const seamPulse = 0.7 + 0.3 * Math.sin(time * 2.5);
@@ -269,9 +273,9 @@ export function updateCore(core, sv, time, audioBands) {
   core.outerEdgeMat.opacity = 0.15 + 0.2 * seamPulseFast;
 }
 
-export function updateRings(rings, sv, time, dt) {
+export function updateRings(rings, sv, time, dt, audioBands) {
   const c = sv.color;
-  const speed = sv.ringSpeed;
+  const baseSpeed = sv.ringSpeed;
   const intensity = sv.intensity;
   const disp = sv.displacement;
   const state = sv.label;
@@ -279,6 +283,9 @@ export function updateRings(rings, sv, time, dt) {
   const axisLf = 1 - Math.exp(-dt * 2.5);
   const targetAxes = RING_AXES[state] || RING_AXES.idle;
   const ringPulse = 0.8 + 0.2 * Math.sin(time * 3);
+
+  // Real-time bass modulates ring speed — rings react to voice/audio
+  const speed = baseSpeed + (audioBands?.bass || 0) * 0.4;
 
   for (let i = 0; i < rings.length; i++) {
     const ring = rings[i];
@@ -299,9 +306,11 @@ export function updateRings(rings, sv, time, dt) {
       ring.group.rotation.y += Math.cos(time * 4 + i * 3) * 0.01;
     }
 
-    // Speaking diameter breathe
-    if (disp > 0.01) {
-      ring.group.scale.setScalar(1 + disp * 0.15 * Math.sin(time * 4 + i * 1.5));
+    // Diameter breathe — enhanced with real bass data
+    const bass = audioBands?.bass || 0;
+    if (disp > 0.01 || bass > 0.05) {
+      const breathAmt = Math.max(disp, bass * 0.1);
+      ring.group.scale.setScalar(1 + breathAmt * 0.2 * Math.sin(time * 4 + i * 1.5));
     } else {
       const s = ring.group.scale.x;
       ring.group.scale.setScalar(s + (1 - s) * lf);
