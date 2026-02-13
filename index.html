@@ -146,6 +146,43 @@
 
     #controls.hidden { opacity: 0; }
 
+    /* ── Live captions ── */
+    #caption {
+      position: fixed;
+      bottom: 100px;
+      left: 50%;
+      transform: translateX(-50%);
+      max-width: 70%;
+      text-align: center;
+      z-index: 10;
+      user-select: none;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.4s ease;
+    }
+
+    #caption.visible { opacity: 1; }
+
+    #caption-label {
+      font-size: 9px;
+      font-weight: 500;
+      letter-spacing: 0.4em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      opacity: 0.4;
+    }
+
+    #caption-text {
+      font-size: 14px;
+      font-weight: 300;
+      letter-spacing: 0.04em;
+      line-height: 1.6;
+      opacity: 0.7;
+    }
+
+    #caption.user #caption-label { opacity: 0.25; }
+    #caption.user #caption-text { opacity: 0.45; font-size: 13px; }
+
     #controls kbd {
       display: inline-block;
       padding: 1px 5px;
@@ -167,6 +204,10 @@
     <div id="logo-line"></div>
   </div>
 
+  <div id="caption">
+    <div id="caption-label"></div>
+    <div id="caption-text"></div>
+  </div>
   <div id="connect-hint">press Space to connect</div>
   <div id="status">idle</div>
   <div id="property">Property of Ilan Bouhadana</div>

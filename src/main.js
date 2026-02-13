@@ -142,6 +142,48 @@ audioManager.onStatusChange = (status) => {
     if (intentionalDisconnect) intentionalDisconnect = false;
     stateManager.setState('idle');
     updateConnectionUI(false);
+    hideCaption();
+  }
+};
+
+// ─── Live Captions ────────────────────────────────────────
+
+const captionEl = document.getElementById('caption');
+const captionLabelEl = document.getElementById('caption-label');
+const captionTextEl = document.getElementById('caption-text');
+let captionFadeTimer = null;
+
+function showCaption(label, text, isUser) {
+  captionLabelEl.textContent = label;
+  captionTextEl.textContent = text;
+  captionEl.className = isUser ? 'visible user' : 'visible';
+
+  // Reset fade timer — captions disappear after 4s of no updates
+  clearTimeout(captionFadeTimer);
+  captionFadeTimer = setTimeout(() => {
+    captionEl.className = '';
+  }, 4000);
+}
+
+function hideCaption() {
+  clearTimeout(captionFadeTimer);
+  captionEl.className = '';
+  captionTextEl.textContent = '';
+  captionLabelEl.textContent = '';
+}
+
+audioManager.onMessage = (message) => {
+  const type = message?.type;
+  const text = message?.message;
+  if (!text) return;
+
+  if (type === 'user_transcript') {
+    showCaption('YOU', text, true);
+  } else if (type === 'agent_response') {
+    showCaption('STARK', text, false);
+  } else if (type === 'agent_response_correction') {
+    // Replace the current agent text with the corrected version
+    showCaption('STARK', text, false);
   }
 };
 
@@ -175,7 +217,11 @@ function updateStatusUI(sv) {
     statusEl.textContent = sv.label;
   }
   const [r, g, b] = sv.color;
-  statusEl.style.color = `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, 0.5)`;
+  const rgb = `${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}`;
+  statusEl.style.color = `rgba(${rgb}, 0.5)`;
+  // Caption text inherits the state color
+  captionLabelEl.style.color = `rgba(${rgb}, 0.4)`;
+  captionTextEl.style.color = `rgba(${rgb}, 0.7)`;
 }
 
 function updateConnectionUI(connected) {
