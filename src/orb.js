@@ -50,18 +50,21 @@ export function createCore() {
     uTime: { value: 0.0 },
     uColor: { value: new THREE.Color(38 / 255, 128 / 255, 255 / 255) },
     uIntensity: { value: 1.0 },
+    uAudioLevel: { value: 0.0 },
   };
 
   const material = new THREE.ShaderMaterial({
     uniforms,
     vertexShader: /* glsl */ `
       uniform float uTime;
+      uniform float uAudioLevel;
       varying vec3 vNormal;
       varying vec3 vViewDir;
 
       void main() {
-        // Gentle core breathing (offset from main orb breath)
+        // Breathing + audio-driven scale pulse
         float breath = 1.0 + sin(uTime * 1.2 + 1.0) * 0.08;
+        breath += uAudioLevel * 0.12;  // core expands with voice
         vec3 pos = position * breath;
 
         vec4 worldPos = modelMatrix * vec4(pos, 1.0);
@@ -75,24 +78,21 @@ export function createCore() {
       uniform vec3 uColor;
       uniform float uTime;
       uniform float uIntensity;
+      uniform float uAudioLevel;
       varying vec3 vNormal;
       varying vec3 vViewDir;
 
       void main() {
         float NdotV = max(dot(vNormal, vViewDir), 0.0);
 
-        // Inverse fresnel — brightest at center, falls off at edges
         float centerGlow = pow(NdotV, 1.5);
-        // Soft edge fade (no hard silhouette)
         float edgeFade = smoothstep(0.0, 0.3, NdotV);
 
-        // Pulsing brightness
+        // Pulse with voice — faster, more pronounced when speaking
         float pulse = 0.85 + sin(uTime * 1.8) * 0.15;
+        pulse += uAudioLevel * 0.4;
 
-        // HDR core — push well above 1.0 for bloom to catch
         vec3 color = uColor * 2.0 * centerGlow * edgeFade * pulse * uIntensity;
-
-        // Slight white-hot center
         color += vec3(0.3) * pow(centerGlow, 3.0) * edgeFade * pulse * uIntensity;
 
         float alpha = edgeFade * 0.7 * uIntensity;
@@ -123,17 +123,25 @@ export function createAtmosphere() {
     uColor: { value: new THREE.Color(38 / 255, 128 / 255, 255 / 255) },
     uIntensity: { value: 1.0 },
     uTime: { value: 0.0 },
+    uAudioLevel: { value: 0.0 },
+    uBass: { value: 0.0 },
   };
 
   const material = new THREE.ShaderMaterial({
     uniforms,
     vertexShader: /* glsl */ `
+      uniform float uAudioLevel;
+      uniform float uBass;
       varying vec3 vNormal;
       varying vec3 vViewDir;
       varying vec3 vWorldPos;
 
       void main() {
-        vec4 worldPos = modelMatrix * vec4(position, 1.0);
+        // Halo expands outward with audio — bass drives the push
+        float audioScale = 1.0 + uBass * 0.08 + uAudioLevel * 0.04;
+        vec3 pos = position * audioScale;
+
+        vec4 worldPos = modelMatrix * vec4(pos, 1.0);
         vWorldPos = worldPos.xyz;
         vNormal = normalize(normalMatrix * normal);
         vViewDir = normalize(cameraPosition - worldPos.xyz);
@@ -144,6 +152,8 @@ export function createAtmosphere() {
       uniform vec3 uColor;
       uniform float uIntensity;
       uniform float uTime;
+      uniform float uAudioLevel;
+      uniform float uBass;
       varying vec3 vNormal;
       varying vec3 vViewDir;
       varying vec3 vWorldPos;
@@ -151,17 +161,20 @@ export function createAtmosphere() {
       void main() {
         float NdotV = max(dot(vNormal, vViewDir), 0.0);
 
-        // Pure fresnel — only visible at the edges
-        float fresnel = pow(1.0 - NdotV, 4.0);
+        // Fresnel edge — softened by audio (halo spreads when loud)
+        float fresnelPow = 4.0 - uAudioLevel * 1.5;
+        float fresnel = pow(1.0 - NdotV, fresnelPow);
 
-        // Outer haze layer (very soft, wide)
-        float outerHaze = pow(1.0 - NdotV, 2.5) * 0.08;
+        // Outer haze — wider and brighter with bass
+        float hazePow = 2.5 - uBass * 0.8;
+        float outerHaze = pow(1.0 - NdotV, hazePow) * (0.08 + uBass * 0.12);
 
-        // Subtle breathing modulation
+        // Breathing + audio-driven pulse
         float breathe = 0.9 + sin(uTime * 0.6) * 0.1;
+        breathe += uAudioLevel * 0.25;
 
         float alpha = (fresnel * 0.25 + outerHaze) * uIntensity * breathe;
-        vec3 color = uColor * 0.8 * (fresnel + outerHaze * 0.3);
+        vec3 color = uColor * (0.8 + uAudioLevel * 0.4) * (fresnel + outerHaze * 0.3);
 
         gl_FragColor = vec4(color, alpha);
       }
@@ -199,15 +212,16 @@ export function updateOrb(orbUniforms, coreUniforms, atmosUniforms, stateValues,
   orbUniforms.uColor.value.setRGB(c[0], c[1], c[2]);
   orbUniforms.uCoreColor.value.setRGB(cc[0], cc[1], cc[2]);
 
-  // Inner core
+  // Inner core — pulses with voice
   coreUniforms.uTime.value = time;
   coreUniforms.uColor.value.setRGB(c[0], c[1], c[2]);
-  // Core intensity varies slightly with audio
   coreUniforms.uIntensity.value = 0.5 + audioBands.level * 0.3;
+  coreUniforms.uAudioLevel.value = audioBands.level;
 
-  // Atmosphere
+  // Atmosphere halo — expands and brightens with voice
   atmosUniforms.uTime.value = time;
   atmosUniforms.uColor.value.setRGB(c[0], c[1], c[2]);
-  // Atmosphere — subtle, doesn't overpower surface detail
   atmosUniforms.uIntensity.value = 0.4 + audioBands.level * 0.2;
+  atmosUniforms.uAudioLevel.value = audioBands.level;
+  atmosUniforms.uBass.value = audioBands.bass;
 }
