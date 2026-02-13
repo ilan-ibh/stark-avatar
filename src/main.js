@@ -307,7 +307,8 @@ async function toggleAgent() {
     stateManager.setState('thinking');
     try {
       await audioManager.startConversation();
-    } catch {
+    } catch (err) {
+      console.error('[stark] connection failed:', err);
       stateManager.setState('alert');
       setTimeout(() => stateManager.setState('idle'), 2000);
     }
