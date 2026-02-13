@@ -31,8 +31,8 @@ const STATE_CONFIGS = {
     displacement: 0,
     scale: 0.93,
     containmentPulse: 0.15,
-    innerGlow: 0.7,
-    bloomStrength: 0.6,
+    innerGlow: 0.55,
+    bloomStrength: 0.45,
     label: 'thinking',
   },
   speaking: {
@@ -45,8 +45,8 @@ const STATE_CONFIGS = {
     displacement: 0.18,
     scale: 1.05,
     containmentPulse: 0.35,
-    innerGlow: 0.75,
-    bloomStrength: 0.65,
+    innerGlow: 0.55,
+    bloomStrength: 0.45,
     label: 'speaking',
   },
   listening: {
