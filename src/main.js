@@ -82,6 +82,7 @@ let committedMode = null;
 
 function commitMode(mode) {
   if (mode === committedMode) return;
+  const prev = committedMode;
   committedMode = mode;
   thinkingTriggered = false;
 
@@ -93,6 +94,8 @@ function commitMode(mode) {
     userSpokeDuringTurn = false;
     silenceStartTime = 0;
     stateManager.setState('listening');
+    // Agent just stopped speaking → fade caption after 2s
+    if (prev === 'speaking') fadeCaptionAfterSpeaking();
   }
 }
 
@@ -154,24 +157,39 @@ const captionEl = document.getElementById('caption');
 const captionLabelEl = document.getElementById('caption-label');
 const captionTextEl = document.getElementById('caption-text');
 let captionFadeTimer = null;
+let lastCaptionSource = null; // 'user' or 'agent'
 
 function showCaption(label, text, isUser) {
-  captionLabelEl.textContent = label;
-  captionTextEl.textContent = text;
-  captionEl.className = isUser ? 'visible user' : 'visible';
+  if (captionLabelEl) captionLabelEl.textContent = label;
+  if (captionTextEl) captionTextEl.textContent = text;
+  if (captionEl) captionEl.className = isUser ? 'visible user' : 'visible';
+  lastCaptionSource = isUser ? 'user' : 'agent';
 
-  // Reset fade timer — captions disappear after 4s of no updates
+  // User captions fade after 3s (they get replaced by agent response anyway)
+  // Agent captions stay visible — cleared by fadeCaptionAfterSpeaking()
+  clearTimeout(captionFadeTimer);
+  if (isUser) {
+    captionFadeTimer = setTimeout(() => {
+      if (captionEl) captionEl.className = '';
+    }, 3000);
+  }
+}
+
+function fadeCaptionAfterSpeaking() {
+  // Called when agent stops speaking — keep text visible for 2 more seconds
+  if (lastCaptionSource !== 'agent') return;
   clearTimeout(captionFadeTimer);
   captionFadeTimer = setTimeout(() => {
-    captionEl.className = '';
-  }, 4000);
+    if (captionEl) captionEl.className = '';
+  }, 2000);
 }
 
 function hideCaption() {
   clearTimeout(captionFadeTimer);
-  captionEl.className = '';
-  captionTextEl.textContent = '';
-  captionLabelEl.textContent = '';
+  if (captionEl) captionEl.className = '';
+  if (captionTextEl) captionTextEl.textContent = '';
+  if (captionLabelEl) captionLabelEl.textContent = '';
+  lastCaptionSource = null;
 }
 
 audioManager.onMessage = (message) => {

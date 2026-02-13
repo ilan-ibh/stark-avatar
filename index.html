@@ -146,14 +146,13 @@
 
     #controls.hidden { opacity: 0; }
 
-    /* ── Live captions ── */
+    /* ── Live captions — left side ── */
     #caption {
       position: fixed;
-      bottom: 100px;
-      left: 50%;
-      transform: translateX(-50%);
-      max-width: 70%;
-      text-align: center;
+      bottom: 80px;
+      left: 32px;
+      max-width: 340px;
+      text-align: left;
       z-index: 10;
       user-select: none;
       pointer-events: none;
@@ -173,15 +172,15 @@
     }
 
     #caption-text {
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 300;
-      letter-spacing: 0.04em;
-      line-height: 1.6;
-      opacity: 0.7;
+      letter-spacing: 0.02em;
+      line-height: 1.7;
+      opacity: 0.75;
     }
 
-    #caption.user #caption-label { opacity: 0.25; }
-    #caption.user #caption-text { opacity: 0.45; font-size: 13px; }
+    #caption.user #caption-label { opacity: 0.2; }
+    #caption.user #caption-text { opacity: 0.4; font-size: 12px; font-style: italic; }
 
     #controls kbd {
       display: inline-block;
