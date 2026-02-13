@@ -424,7 +424,11 @@ app.post(
             const chunk = JSON.parse(payload);
             const content = chunk.choices?.[0]?.delta?.content;
             if (content) {
-              if (!firstChunkMs) firstChunkMs = Date.now() - start;
+              // Hold the first real chunk briefly so TTS finishes the buffer phrase
+              if (!firstChunkMs) {
+                firstChunkMs = Date.now() - start;
+                if (buffer) await new Promise((r) => setTimeout(r, 800));
+              }
               fullContent += content;
               lastChunkTime = Date.now();
             }
