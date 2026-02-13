@@ -1,5 +1,5 @@
 /**
- * Stark Voice Proxy v7
+ * Stark Voice Proxy v8
  *
  * Bridges ElevenLabs Conversational AI ↔ OpenClaw Gateway.
  *
@@ -248,34 +248,57 @@ app.post(
       const reader = upstreamRes.body.getReader();
       const decoder = new TextDecoder();
       let partial = "";
+      let lastChunkTime = Date.now();
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      // Keep-alive: send filler chunks every 10s during long tool calls
+      // so ElevenLabs doesn't hit the cascade timeout and drop the connection.
+      const KEEPALIVE_INTERVAL_MS = 10000;
+      const KEEPALIVE_PHRASES = ["... ", "still working on that... ", "one moment... "];
+      let keepAliveIdx = 0;
+      const keepAliveTimer = setInterval(() => {
+        if (Date.now() - lastChunkTime > KEEPALIVE_INTERVAL_MS - 1000) {
+          const phrase = KEEPALIVE_PHRASES[keepAliveIdx % KEEPALIVE_PHRASES.length];
+          keepAliveIdx++;
+          res.write(sseChunk(`chatcmpl-keepalive-${Date.now()}`, phrase));
+          if (typeof res.flush === "function") res.flush();
+          fullContent += phrase;
+          lastChunkTime = Date.now();
+          console.log(`[proxy] keep-alive sent: "${phrase.trim()}"`);
+        }
+      }, KEEPALIVE_INTERVAL_MS);
 
-        partial += decoder.decode(value, { stream: true });
-        const lines = partial.split("\n");
-        partial = lines.pop() || "";
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith("data: ")) continue;
-          const payload = trimmed.slice(6);
-          if (payload === "[DONE]") continue;
+          partial += decoder.decode(value, { stream: true });
+          const lines = partial.split("\n");
+          partial = lines.pop() || "";
 
-          try {
-            const chunk = JSON.parse(payload);
-            const content = chunk.choices?.[0]?.delta?.content;
-            if (content) {
-              if (!firstChunkMs) firstChunkMs = Date.now() - start;
-              fullContent += content;
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.startsWith("data: ")) continue;
+            const payload = trimmed.slice(6);
+            if (payload === "[DONE]") continue;
+
+            try {
+              const chunk = JSON.parse(payload);
+              const content = chunk.choices?.[0]?.delta?.content;
+              if (content) {
+                if (!firstChunkMs) firstChunkMs = Date.now() - start;
+                fullContent += content;
+                lastChunkTime = Date.now();
+              }
+              // Pipe through verbatim
+              res.write(`data: ${payload}\n\n`);
+            } catch {
+              res.write(`${trimmed}\n\n`);
             }
-            // Pipe through verbatim
-            res.write(`data: ${payload}\n\n`);
-          } catch {
-            res.write(`${trimmed}\n\n`);
           }
         }
+      } finally {
+        clearInterval(keepAliveTimer);
       }
 
       // Cache for dedup
@@ -304,7 +327,7 @@ app.post(
 // --- Start ---
 const server = createServer(app);
 server.listen(PORT, () => {
-  console.log(`[stark-proxy] ⚡ v7 — silence filter + abort + buffer + voice hint`);
+  console.log(`[stark-proxy] ⚡ v8 — silence filter + abort + buffer + keep-alive`);
   console.log(`[stark-proxy] → ${OPENCLAW_URL}`);
   console.log(`[stark-proxy] Port: ${PORT} | Agent: ${OPENCLAW_AGENT}`);
 });
