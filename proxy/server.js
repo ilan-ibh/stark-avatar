@@ -68,8 +68,22 @@ const PHRASE_CATEGORIES = {
     keepAlive: ["Still going through our history... ", "Looking further back... ", "Almost there... "],
   },
   fallback: {
-    initial: ["Let me think about that... ", "One sec... ", "Good question... ", "Alright, let me work on that... "],
-    keepAlive: ["Still working on it... ", "Bear with me... ", "Almost there... "],
+    initial: [
+      "Let me think about that... ",
+      "One sec... ",
+      "Good question... ",
+      "Alright, let me work on that... ",
+      "Give me a moment... ",
+      "Hmm, let me figure this out... ",
+      "On it... ",
+    ],
+    keepAlive: [
+      "Still working on it... ",
+      "Bear with me... ",
+      "Almost there... ",
+      "Just a bit longer... ",
+      "Hang tight... ",
+    ],
   },
 };
 
