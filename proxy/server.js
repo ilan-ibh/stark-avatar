@@ -84,8 +84,17 @@ function matchCategory(userText) {
 
 let lastInitialIdx = -1;
 
-function getContextualPhrases(userText) {
+// Track when we last sent a buffer per session — prevents double-buffer
+// from speculative turn duplicates cutting each other
+const lastBufferTime = new Map();
+const BUFFER_COOLDOWN_MS = 4000;
+
+function getContextualPhrases(userText, sessionId) {
   const cat = matchCategory(userText);
+
+  // Check if we sent a buffer recently for this session
+  const lastSent = lastBufferTime.get(sessionId) || 0;
+  const skipBuffer = Date.now() - lastSent < BUFFER_COOLDOWN_MS;
 
   // Pick initial phrase (avoid repeating the last one)
   let idx;
@@ -94,8 +103,12 @@ function getContextualPhrases(userText) {
   } while (idx === lastInitialIdx && cat.initial.length > 1);
   lastInitialIdx = idx;
 
+  if (!skipBuffer) {
+    lastBufferTime.set(sessionId, Date.now());
+  }
+
   return {
-    initial: cat.initial[idx],
+    initial: skipBuffer ? null : cat.initial[idx],
     keepAlive: cat.keepAlive,
   };
 }
@@ -266,17 +279,24 @@ app.post(
     res.flushHeaders(); // Force headers out immediately
 
     // --- Contextual buffer phrase: flush BEFORE fetch starts ---
-    const phrases = getContextualPhrases(userText);
+    // Skipped if we already sent a buffer in the last 4s (speculative turn duplicate)
+    const phrases = getContextualPhrases(userText, sessionId);
     const buffer = phrases.initial;
-    res.write(sseChunk(`chatcmpl-buf-${Date.now()}`, buffer));
-    if (typeof res.flush === "function") res.flush();
-    if (res.socket) res.socket.uncork?.();
+
+    if (buffer) {
+      res.write(sseChunk(`chatcmpl-buf-${Date.now()}`, buffer));
+      if (typeof res.flush === "function") res.flush();
+      if (res.socket) res.socket.uncork?.();
+      console.log(`[proxy] buffer: "${buffer.trim()}"`);
+    } else {
+      console.log(`[proxy] buffer skipped (cooldown — speculative turn)`);
+    }
 
     const controller = new AbortController();
     inFlight.set(sessionId, { controller, userText });
 
     const start = Date.now();
-    let fullContent = buffer;
+    let fullContent = buffer || "";
     let firstChunkMs = 0;
 
     try {
