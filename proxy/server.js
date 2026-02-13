@@ -139,37 +139,30 @@ function matchCategory(userText) {
 
 let lastInitialIdx = -1;
 
-// Track when we last sent a buffer per session — prevents double-buffer
-// from speculative turn duplicates cutting each other
-const lastBufferTime = new Map();
-const BUFFER_COOLDOWN_MS = 4000;
-
-function getContextualPhrases(userText, sessionId) {
+function getContextualPhrases(userText) {
   const cat = matchCategory(userText);
 
-  // Check if we sent a buffer recently for this session
-  const lastSent = lastBufferTime.get(sessionId) || 0;
-  const skipBuffer = Date.now() - lastSent < BUFFER_COOLDOWN_MS;
-
-  // Pick initial phrase (avoid repeating the last one)
   let idx;
   do {
     idx = Math.floor(Math.random() * cat.initial.length);
   } while (idx === lastInitialIdx && cat.initial.length > 1);
   lastInitialIdx = idx;
 
-  if (!skipBuffer) {
-    lastBufferTime.set(sessionId, Date.now());
-  }
-
   return {
-    initial: skipBuffer ? null : cat.initial[idx],
+    initial: cat.initial[idx],
     keepAlive: cat.keepAlive,
   };
 }
 
 // --- In-flight tracking per session ---
-const inFlight = new Map(); // sessionId → AbortController
+const inFlight = new Map(); // sessionId → { controller, userText }
+
+// --- Debounce per session ---
+// Delays the response by 1.5s to let speculative turns settle.
+// If a new request arrives in that window, the old one closes cleanly
+// (no buffer was sent, nothing to cut) and the new one takes over.
+const DEBOUNCE_MS = 1500;
+const pendingRequests = new Map(); // sessionId → { timer, resolve, reject }
 
 // --- Deduplication ---
 const DEDUP_WINDOW_MS = 15000;
@@ -282,26 +275,50 @@ app.post(
     logMessage(sessionId, "user", userText);
     console.log(`[proxy] user: ${userText.slice(0, 100)}`);
 
-    // --- Handle in-flight requests for this session ---
+    // --- Abort any in-flight fetch for this session ---
     if (inFlight.has(sessionId)) {
       const existing = inFlight.get(sessionId);
-      // Only abort if the new message is DIFFERENT (more complete transcript)
-      // If it's the same message, it's a retry — just drop the new request
-      if (existing.userText === userText) {
-        console.log(`[proxy] DUPLICATE — same message already in-flight, dropping`);
-        res.setHeader("Content-Type", "text/event-stream");
-        res.setHeader("Cache-Control", "no-cache");
-        res.setHeader("Connection", "keep-alive");
-        res.write(sseChunk(`chatcmpl-dup-${Date.now()}`, " "));
-        res.write("data: [DONE]\n\n");
-        res.end();
-        return;
-      }
-      // Different message = speculative turn update, abort the old one
-      console.log(`[proxy] ABORT in-flight: "${existing.userText.slice(0, 40)}" → "${userText.slice(0, 40)}"`);
+      console.log(`[proxy] ABORT in-flight: "${existing.userText.slice(0, 40)}"`);
       try { existing.controller.abort(); } catch {}
       inFlight.delete(sessionId);
     }
+
+    // --- Debounce: wait for transcript to stabilize ---
+    // Speculative turns send partial→complete within 1-2s. We hold 1.5s
+    // before responding. If a new request arrives, the old one closes
+    // cleanly (no buffer was sent, nothing to cut) and the timer resets.
+    if (pendingRequests.has(sessionId)) {
+      const pending = pendingRequests.get(sessionId);
+      clearTimeout(pending.timer);
+      pending.reject('superseded');
+      pendingRequests.delete(sessionId);
+    }
+
+    // Close this response early if superseded during debounce
+    let superseded = false;
+    try {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, DEBOUNCE_MS);
+        pendingRequests.set(sessionId, { timer, resolve, reject });
+      });
+      pendingRequests.delete(sessionId);
+    } catch {
+      // Superseded by a newer request
+      superseded = true;
+      pendingRequests.delete(sessionId);
+    }
+
+    if (superseded) {
+      console.log(`[proxy] debounce: superseded, closing`);
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.write(sseChunk(`chatcmpl-superseded-${Date.now()}`, " "));
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
+    }
+
+    console.log(`[proxy] debounce: settled, proceeding with: "${userText.slice(0, 60)}"`);
 
     // Clean up for OpenClaw
     delete body.elevenlabs_extra_body;
@@ -331,20 +348,16 @@ app.post(
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
     res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders(); // Force headers out immediately
+    res.flushHeaders();
 
-    // --- Contextual buffer phrase: flush BEFORE fetch starts ---
-    // Skipped if we already sent a buffer in the last 4s (speculative turn duplicate)
-    const phrases = getContextualPhrases(userText, sessionId);
+    // --- Contextual buffer phrase ---
+    const phrases = getContextualPhrases(userText);
     const buffer = phrases.initial;
 
     if (buffer) {
       res.write(sseChunk(`chatcmpl-buf-${Date.now()}`, buffer));
       if (typeof res.flush === "function") res.flush();
-      if (res.socket) res.socket.uncork?.();
       console.log(`[proxy] buffer: "${buffer.trim()}"`);
-    } else {
-      console.log(`[proxy] buffer skipped (cooldown — speculative turn)`);
     }
 
     const controller = new AbortController();
