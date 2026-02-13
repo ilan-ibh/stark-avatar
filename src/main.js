@@ -97,6 +97,7 @@ function commitMode(mode) {
 }
 
 audioManager.onModeChange = (mode) => {
+  // Speaking always commits immediately — no lag on voice start
   if (mode === 'speaking') {
     clearTimeout(modeDebounceTimer);
     pendingMode = null;
@@ -104,6 +105,12 @@ audioManager.onModeChange = (mode) => {
     return;
   }
 
+  // Ignore 'listening' if thinking-gap is active — stay in thinking until speaking arrives
+  if (mode === 'listening' && thinkingTriggered) {
+    return;
+  }
+
+  // Debounce speaking→listening to absorb brief speech pauses
   if (mode === 'listening' && committedMode === 'speaking') {
     pendingMode = 'listening';
     clearTimeout(modeDebounceTimer);
