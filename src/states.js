@@ -38,15 +38,15 @@ const STATE_CONFIGS = {
   speaking: {
     color: [160 / 255, 200 / 255, 255 / 255],        // Bright white-blue
     coreColor: [80 / 255, 110 / 255, 160 / 255],
-    intensity: 1.6,
+    intensity: 1.2,
     rotationSpeed: 0.2,
     ringSpeed: 0.5,
     particleSpeed: 0.8,
     displacement: 0.07,
     scale: 1.05,
     containmentPulse: 0.35,
-    innerGlow: 0.55,
-    bloomStrength: 0.45,
+    innerGlow: 0.4,
+    bloomStrength: 0.35,
     label: 'speaking',
   },
   listening: {
