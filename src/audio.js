@@ -71,7 +71,9 @@ export class AudioManager {
           this.onStatusChange?.('disconnected');
         },
 
-        onModeChange: ({ mode }) => {
+        onModeChange: (data) => {
+          console.log('[stark] SDK onModeChange raw:', JSON.stringify(data));
+          const mode = data?.mode || data;
           this.agentMode = mode;
           this.onModeChange?.(mode);
         },
