@@ -4,8 +4,14 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
-import { createOrb, createCore, createAtmosphere, updateOrb } from './orb.js';
-import { createParticles, createDust, updateParticles, updateDust } from './particles.js';
+import {
+  createCore, createRings, createContainment,
+  updateCore, updateRings, updateContainment,
+} from './orb.js';
+import {
+  createParticles, createLeadParticles,
+  updateParticles, updateLeadParticles,
+} from './particles.js';
 import { StateManager } from './states.js';
 import { AudioManager } from './audio.js';
 
@@ -14,51 +20,49 @@ import { AudioManager } from './audio.js';
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
 
-const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 100);
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
 camera.position.set(0, 0, 5.0);
 camera.lookAt(0, 0, 0);
 
 const renderer = new THREE.WebGLRenderer({
   antialias: true,
   powerPreference: 'high-performance',
+  alpha: false,
 });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
 document.body.appendChild(renderer.domElement);
 
-// ─── Post-Processing ───────────────────────────────────────
+// ─── Post-Processing (Bloom) ───────────────────────────────
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 
 const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(window.innerWidth, window.innerHeight),
-  0.8,   // strength (driven by state)
-  0.45,  // radius
-  0.3,   // threshold
+  1.8,   // intensity (matches Lovable's bloom)
+  0.4,   // radius
+  0.1,   // luminance threshold (low — catches more glow)
 );
 composer.addPass(bloomPass);
 composer.addPass(new OutputPass());
 
-// ─── Orb + Core + Atmosphere ───────────────────────────────
+// ─── Scene Objects ─────────────────────────────────────────
 
-const { mesh: orbMesh, uniforms: orbUniforms } = createOrb();
-const { mesh: coreMesh, uniforms: coreUniforms } = createCore();
-const { mesh: atmosMesh, uniforms: atmosUniforms } = createAtmosphere();
+const core = createCore();
+scene.add(core.group);
 
-scene.add(coreMesh);
-scene.add(orbMesh);
-scene.add(atmosMesh);
+const rings = createRings();
+for (const ring of rings) scene.add(ring.group);
 
-// ─── Particles + Dust ──────────────────────────────────────
+const containment = createContainment();
+scene.add(containment.group);
 
-const { points: particlePoints, material: particleMaterial } = createParticles();
-const { points: dustPoints, material: dustMaterial } = createDust();
+const particles = createParticles();
+scene.add(particles.points);
 
-scene.add(dustPoints);
-scene.add(particlePoints);
+const leadParticles = createLeadParticles();
+scene.add(leadParticles.points);
 
 // ─── State & Audio ─────────────────────────────────────────
 
@@ -66,21 +70,14 @@ const stateManager = new StateManager();
 const audioManager = new AudioManager();
 
 // ─── Debounced Mode Handling ──────────────────────────────
-// ElevenLabs fires onModeChange rapidly during natural speech pauses.
-// We debounce: only commit a state change if the mode is stable for 400ms.
-// This absorbs flickering between speaking/listening during conversation.
 
 let pendingMode = null;
 let modeDebounceTimer = null;
 const MODE_DEBOUNCE_MS = 400;
 
-// Thinking-gap: after the user speaks and goes silent, show "thinking"
-// while the LLM processes. Track whether the user actually spoke.
 let userSpokeDuringTurn = false;
 let silenceStartTime = 0;
 let thinkingTriggered = false;
-
-// The committed visual state (what the orb is actually showing)
 let committedMode = null;
 
 function commitMode(mode) {
@@ -100,7 +97,6 @@ function commitMode(mode) {
 }
 
 audioManager.onModeChange = (mode) => {
-  // If switching TO speaking, commit immediately (no lag on voice start)
   if (mode === 'speaking') {
     clearTimeout(modeDebounceTimer);
     pendingMode = null;
@@ -108,7 +104,6 @@ audioManager.onModeChange = (mode) => {
     return;
   }
 
-  // For listening, debounce — wait 400ms to confirm it's not a brief pause
   if (mode === 'listening' && committedMode === 'speaking') {
     pendingMode = 'listening';
     clearTimeout(modeDebounceTimer);
@@ -121,14 +116,11 @@ audioManager.onModeChange = (mode) => {
     return;
   }
 
-  // Default: commit directly (e.g. first mode change after connect)
   commitMode(mode);
 };
 
 // ─── Connection Status ────────────────────────────────────
-// No auto-reconnect — ElevenLabs can't resume sessions, so reconnecting
-// starts a brand new conversation with first_message. Better to go idle
-// and let the user press Space when ready.
+
 let intentionalDisconnect = false;
 
 audioManager.onStatusChange = (status) => {
@@ -140,11 +132,7 @@ audioManager.onStatusChange = (status) => {
     committedMode = null;
     pendingMode = null;
     clearTimeout(modeDebounceTimer);
-
-    if (intentionalDisconnect) {
-      intentionalDisconnect = false;
-    }
-    // Always return to idle — user presses Space to start a new session
+    if (intentionalDisconnect) intentionalDisconnect = false;
     stateManager.setState('idle');
     updateConnectionUI(false);
   }
@@ -174,7 +162,6 @@ function resetControlsTimer() {
 resetControlsTimer();
 
 function updateStatusUI(sv) {
-  // Always show the orb's actual visual state — it's the source of truth
   if (audioManager.isConnecting) {
     statusEl.textContent = 'connecting';
   } else {
@@ -196,8 +183,8 @@ function updateConnectionUI(connected) {
 // ─── Camera Zoom ───────────────────────────────────────────
 
 let targetZoom = 5.0;
-const ZOOM_MIN = 2.8;
-const ZOOM_MAX = 10.0;
+const ZOOM_MIN = 2.5;
+const ZOOM_MAX = 12.0;
 
 // ─── Keyboard Controls ────────────────────────────────────
 
@@ -276,7 +263,7 @@ async function toggleAgent() {
 window.addEventListener('mousemove', () => showControls());
 
 window.addEventListener('wheel', (e) => {
-  targetZoom += e.deltaY * 0.004;
+  targetZoom += e.deltaY * 0.005;
   targetZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, targetZoom));
 }, { passive: true });
 
@@ -289,9 +276,6 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
   composer.setSize(w, h);
-  const pr = Math.min(window.devicePixelRatio, 2);
-  particleMaterial.uniforms.uPixelRatio.value = pr;
-  dustMaterial.uniforms.uPixelRatio.value = pr;
 });
 
 // ─── Animation Loop ────────────────────────────────────────
@@ -315,40 +299,32 @@ function animate() {
     treble: audioManager.treble,
   };
 
-  // ── Thinking-gap detection ──
-  // Only triggers when: user spoke during this listening turn → then went
-  // fully silent for 1.5s. This means the user finished their sentence and
-  // the LLM is processing. Does NOT trigger during speech pauses.
+  // Thinking-gap detection
   if (committedMode === 'listening' && !thinkingTriggered) {
     if (audioManager.level > 0.08) {
-      // User is speaking — mark it and reset silence timer
       userSpokeDuringTurn = true;
       silenceStartTime = 0;
     } else if (userSpokeDuringTurn && silenceStartTime === 0) {
-      // User just went silent — start the silence timer
       silenceStartTime = performance.now();
-    } else if (
-      userSpokeDuringTurn &&
-      silenceStartTime > 0 &&
-      performance.now() - silenceStartTime > 1500
-    ) {
-      // Sustained silence after speech — LLM is processing
+    } else if (userSpokeDuringTurn && silenceStartTime > 0 && performance.now() - silenceStartTime > 1500) {
       thinkingTriggered = true;
       stateManager.setState('thinking');
     }
   }
 
-  updateOrb(orbUniforms, coreUniforms, atmosUniforms, sv, elapsed, audioBands);
+  // Update visual components
+  updateCore(core, sv, elapsed, audioBands);
+  updateRings(rings, sv, elapsed, dt);
+  updateContainment(containment, sv, elapsed, dt, stateManager);
+  updateParticles(particles, sv, elapsed, dt);
+  updateLeadParticles(leadParticles, sv, elapsed, dt);
 
-  orbMesh.rotation.y += sv.rotationSpeed * dt;
-  coreMesh.rotation.y -= sv.rotationSpeed * 0.5 * dt;
-  atmosMesh.rotation.y += sv.rotationSpeed * 0.2 * dt;
-
-  updateParticles(particleMaterial, sv, elapsed, audioBands.level);
-  updateDust(dustMaterial, sv, elapsed);
-
+  // Bloom
   bloomPass.strength = sv.bloomStrength + stateManager.flashIntensity * 2.0;
-  camera.position.z += (targetZoom - camera.position.z) * 0.04;
+
+  // Camera zoom
+  const lf = 1 - Math.exp(-dt * 5);
+  camera.position.z = THREE.MathUtils.lerp(camera.position.z, targetZoom, lf);
 
   updateStatusUI(sv);
   composer.render();

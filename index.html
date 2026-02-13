@@ -19,6 +19,7 @@
       width: 100%;
       height: 100%;
       cursor: none;
+      font-family: 'Fira Code', monospace;
     }
 
     canvas {
@@ -28,53 +29,115 @@
       left: 0;
     }
 
-    /* Status text - bottom center */
+    /* ── Scan lines overlay ── */
+    #scanlines {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent, transparent 2px,
+        rgba(100, 180, 255, 0.015) 2px,
+        rgba(100, 180, 255, 0.015) 4px
+      );
+      mix-blend-mode: screen;
+      z-index: 5;
+    }
+
+    /* ── Vignette overlay ── */
+    #vignette {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.6) 100%);
+      z-index: 6;
+    }
+
+    /* ── STARK logo — top left ── */
+    #logo {
+      position: fixed;
+      top: 32px;
+      left: 32px;
+      pointer-events: none;
+      user-select: none;
+      z-index: 10;
+    }
+
+    #logo h1 {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 0.5em;
+      text-transform: uppercase;
+      color: rgba(100, 180, 255, 0.35);
+      transition: color 0.7s ease;
+    }
+
+    #logo-line {
+      height: 1px;
+      margin-top: 4px;
+      background: linear-gradient(90deg, rgba(100, 180, 255, 0.25) 0%, transparent 100%);
+      transition: background 0.7s ease;
+    }
+
+    /* ── State label — bottom center ── */
     #status {
       position: fixed;
       bottom: 48px;
       left: 50%;
       transform: translateX(-50%);
-      font-family: 'Fira Code', monospace;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 400;
       letter-spacing: 0.35em;
       text-transform: uppercase;
-      color: rgba(38, 128, 255, 0.5);
-      transition: color 0.8s ease;
+      color: rgba(100, 180, 255, 0.5);
+      transition: color 0.7s ease;
       z-index: 10;
       user-select: none;
       pointer-events: none;
     }
 
-    /* Connection dot */
-    #status::before {
-      content: '';
-      display: inline-block;
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: currentColor;
-      margin-right: 10px;
-      vertical-align: middle;
-      opacity: 0.7;
-      animation: pulse-dot 3s ease-in-out infinite;
+    /* ── Connection hint — above status ── */
+    #connect-hint {
+      position: fixed;
+      bottom: 78px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 10px;
+      font-weight: 300;
+      letter-spacing: 0.2em;
+      text-transform: lowercase;
+      color: rgba(255, 255, 255, 0.15);
+      z-index: 10;
+      user-select: none;
+      pointer-events: none;
+      transition: opacity 0.6s ease;
     }
 
-    @keyframes pulse-dot {
-      0%, 100% { opacity: 0.4; }
-      50% { opacity: 1.0; }
+    /* ── Property line — bottom right ── */
+    #property {
+      position: fixed;
+      bottom: 32px;
+      right: 32px;
+      font-size: 10px;
+      font-weight: 300;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: rgba(100, 180, 255, 0.2);
+      transition: color 0.7s ease;
+      z-index: 10;
+      user-select: none;
+      pointer-events: none;
     }
 
-    /* Controls hint - top right */
+    /* ── Controls hint — top right ── */
     #controls {
       position: fixed;
-      top: 28px;
+      top: 32px;
       right: 32px;
-      font-family: 'Fira Code', monospace;
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 300;
-      color: rgba(255, 255, 255, 0.2);
-      line-height: 2;
+      color: rgba(255, 255, 255, 0.15);
+      line-height: 2.2;
       text-align: right;
       z-index: 10;
       user-select: none;
@@ -82,43 +145,33 @@
       transition: opacity 0.6s ease;
     }
 
-    #controls.hidden {
-      opacity: 0;
-    }
+    #controls.hidden { opacity: 0; }
 
     #controls kbd {
       display: inline-block;
-      padding: 1px 6px;
-      border: 1px solid rgba(255, 255, 255, 0.15);
+      padding: 1px 5px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
       border-radius: 3px;
       font-family: inherit;
-      font-size: 10px;
-      margin-right: 4px;
-      color: rgba(255, 255, 255, 0.35);
-    }
-
-    /* Connection prompt - bottom center above status */
-    #connect-hint {
-      position: fixed;
-      bottom: 78px;
-      left: 50%;
-      transform: translateX(-50%);
-      font-family: 'Fira Code', monospace;
-      font-size: 11px;
-      font-weight: 300;
-      letter-spacing: 0.2em;
-      text-transform: lowercase;
-      color: rgba(255, 255, 255, 0.18);
-      z-index: 10;
-      user-select: none;
-      pointer-events: none;
-      transition: opacity 0.6s ease;
+      font-size: 9px;
+      margin-right: 3px;
+      color: rgba(255, 255, 255, 0.25);
     }
   </style>
 </head>
 <body>
+  <div id="scanlines"></div>
+  <div id="vignette"></div>
+
+  <div id="logo">
+    <h1>STARK</h1>
+    <div id="logo-line"></div>
+  </div>
+
   <div id="connect-hint">press Space to connect</div>
   <div id="status">idle</div>
+  <div id="property">Property of Ilan Bouhadana</div>
+
   <div id="controls">
     <kbd>Space</kbd> connect agent<br />
     <kbd>1</kbd>–<kbd>5</kbd> manual states<br />
@@ -127,6 +180,7 @@
     <kbd>F</kbd> fullscreen<br />
     <kbd>Esc</kbd> toggle hints
   </div>
+
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>
