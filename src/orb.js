@@ -198,9 +198,9 @@ export function updateCore(core, sv, time, audioBands) {
   const colors = core.facetedGeo.attributes.color.array;
   const positions = core.facetedGeo.attributes.position.array;
 
-  // Audio-driven displacement (replaces simulated audio from Lovable)
+  // Audio-driven displacement — kept subtle so faces don't fly off
   const audioDisp = disp > 0.001
-    ? disp * (1.0 + audioBands.bass * 2.0 + audioBands.mid * 1.0)
+    ? disp * (1.0 + audioBands.bass * 0.8 + audioBands.mid * 0.4)
     : 0;
 
   for (let fi = 0; fi < core.faceCount; fi++) {
