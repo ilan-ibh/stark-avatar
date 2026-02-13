@@ -125,44 +125,28 @@ audioManager.onModeChange = (mode) => {
   commitMode(mode);
 };
 
-// ─── Auto-Reconnect ───────────────────────────────────────
-// Silent reconnect on unexpected drops. No alert flash unless all retries fail.
+// ─── Connection Status ────────────────────────────────────
+// No auto-reconnect — ElevenLabs can't resume sessions, so reconnecting
+// starts a brand new conversation with first_message. Better to go idle
+// and let the user press Space when ready.
 let intentionalDisconnect = false;
-let reconnectAttempts = 0;
-const MAX_RECONNECT = 3;
 
 audioManager.onStatusChange = (status) => {
   if (status === 'connected') {
-    reconnectAttempts = 0;
     committedMode = 'listening';
     stateManager.setState('listening');
     updateConnectionUI(true);
   } else if (status === 'disconnected') {
-    updateConnectionUI(false);
     committedMode = null;
+    pendingMode = null;
+    clearTimeout(modeDebounceTimer);
 
     if (intentionalDisconnect) {
       intentionalDisconnect = false;
-      stateManager.setState('idle');
-    } else if (reconnectAttempts < MAX_RECONNECT) {
-      // Silent reconnect — no alert flash, just show thinking
-      reconnectAttempts++;
-      stateManager.setState('thinking');
-      const delay = Math.min(1500 * Math.pow(2, reconnectAttempts - 1), 8000);
-      setTimeout(async () => {
-        try {
-          await audioManager.startConversation();
-        } catch {
-          if (reconnectAttempts >= MAX_RECONNECT) {
-            stateManager.setState('alert');
-            setTimeout(() => stateManager.setState('idle'), 2000);
-          }
-        }
-      }, delay);
-    } else {
-      stateManager.setState('alert');
-      setTimeout(() => stateManager.setState('idle'), 2000);
     }
+    // Always return to idle — user presses Space to start a new session
+    stateManager.setState('idle');
+    updateConnectionUI(false);
   }
 };
 
@@ -276,11 +260,9 @@ window.addEventListener('keydown', (e) => {
 async function toggleAgent() {
   if (audioManager.isActive) {
     intentionalDisconnect = true;
-    reconnectAttempts = MAX_RECONNECT; // prevent auto-reconnect
     await audioManager.stopConversation();
     stateManager.setState('idle');
   } else if (!audioManager.isConnecting) {
-    reconnectAttempts = 0;
     stateManager.setState('thinking');
     try {
       await audioManager.startConversation();
