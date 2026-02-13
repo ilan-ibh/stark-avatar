@@ -33,14 +33,49 @@ const VOICE_HINT = " [Voice call — keep response under 3-4 sentences. Do NOT s
 
 const PHRASE_CATEGORIES = {
   email: {
-    keywords: ['email', 'inbox', 'mail', 'message', 'messages', 'unread', 'send an email', 'reply', 'whatsapp', 'telegram', 'slack', 'discord', 'notification', 'notifications'],
-    initial: ["Let me check your inbox... ", "Pulling up your emails... ", "Let me look at your messages... "],
+    keywords: ['email', 'inbox', 'mail', 'unread', 'send an email', 'reply to'],
+    initial: ["Checking your inbox... ", "Pulling up your emails... ", "Let me look at your mail... "],
     keepAlive: ["Going through your emails... ", "Still reading through them... ", "Almost done checking... "],
   },
   calendar: {
     keywords: ['calendar', 'schedule', 'meeting', 'appointment', 'event', 'free time', 'busy', 'availability'],
-    initial: ["Let me check your schedule... ", "Pulling up your calendar... ", "Looking at your agenda... "],
+    initial: ["Checking your schedule... ", "Pulling up your calendar... ", "Looking at your agenda... "],
     keepAlive: ["Going through your events... ", "Checking the details... ", "One moment, still looking... "],
+  },
+  weather: {
+    keywords: ['weather', 'forecast', 'temperature', 'rain', 'sunny', 'cold', 'hot outside'],
+    initial: ["Checking the forecast... ", "Let me look at the weather... "],
+    keepAlive: ["Still pulling the data... ", "Almost there... "],
+  },
+  whatsapp: {
+    keywords: ['whatsapp', 'whats app'],
+    initial: ["Checking your WhatsApp... ", "Pulling up your chats... ", "Let me look at your messages... "],
+    keepAlive: ["Going through your conversations... ", "Still reading... ", "Almost done... "],
+  },
+  messaging: {
+    keywords: ['message', 'messages', 'telegram', 'slack', 'discord', 'notification', 'notifications', 'dm', 'chat'],
+    initial: ["Checking your messages... ", "Let me pull those up... ", "Looking at your notifications... "],
+    keepAlive: ["Going through them... ", "Still reading... ", "Almost done... "],
+  },
+  twitter: {
+    keywords: ['twitter', 'tweet', 'x.com', 'timeline', 'trending', 'post on x'],
+    initial: ["Checking your timeline... ", "Pulling up X... ", "Let me look at that... "],
+    keepAlive: ["Going through the feed... ", "Still looking... ", "Almost there... "],
+  },
+  tasks: {
+    keywords: ['task', 'tasks', 'todo', 'to-do', 'things', 'reminder', 'reminders', 'due'],
+    initial: ["Checking your tasks... ", "Pulling up your to-dos... ", "Let me look at that... "],
+    keepAlive: ["Going through your list... ", "Still checking... ", "Almost done... "],
+  },
+  health: {
+    keywords: ['health', 'whoop', 'sleep', 'recovery', 'heart rate', 'hrv', 'strain', 'workout', 'steps', 'fitness'],
+    initial: ["Checking your health data... ", "Pulling up your stats... ", "Let me look at your recovery... "],
+    keepAlive: ["Going through the data... ", "Still pulling your metrics... ", "Almost there... "],
+  },
+  crypto: {
+    keywords: ['crypto', 'bitcoin', 'btc', 'ethereum', 'eth', 'hyperliquid', 'portfolio', 'position', 'pnl', 'trading', 'price'],
+    initial: ["Checking the markets... ", "Pulling up your positions... ", "Looking at the numbers... "],
+    keepAlive: ["Still crunching the data... ", "Going through your portfolio... ", "Almost done... "],
   },
   search: {
     keywords: ['search', 'look up', 'find', 'google', 'what is', 'who is', 'look for', 'research'],
@@ -48,42 +83,48 @@ const PHRASE_CATEGORIES = {
     keepAlive: ["Still searching... ", "Going through the results... ", "Almost there... "],
   },
   code: {
-    keywords: ['code', 'bug', 'error', 'deploy', 'build', 'commit', 'repo', 'pull request', 'github'],
-    initial: ["Let me check on that... ", "Looking into it... ", "Let me pull that up... "],
+    keywords: ['code', 'bug', 'error', 'deploy', 'build', 'commit', 'repo', 'pull request', 'github', 'merge'],
+    initial: ["Looking into that... ", "Checking the repo... ", "Let me pull that up... "],
     keepAlive: ["Still going through the code... ", "Digging into the details... ", "Almost got it... "],
   },
-  data: {
-    keywords: ['price', 'stock', 'market', 'trading', 'portfolio', 'crypto', 'bitcoin', 'balance'],
-    initial: ["Let me check the numbers... ", "Pulling up the data... ", "Looking at the latest figures... "],
-    keepAlive: ["Still crunching the numbers... ", "Going through the data... ", "Almost done... "],
+  notes: {
+    keywords: ['note', 'notes', 'write down', 'jot', 'obsidian', 'save this', 'log this'],
+    initial: ["On it... ", "Writing that down... ", "Let me save that... "],
+    keepAlive: ["Still working on it... ", "Almost done... "],
   },
-  file: {
-    keywords: ['file', 'document', 'folder', 'download', 'upload', 'save', 'open', 'read'],
-    initial: ["Let me grab that... ", "Looking for that file... ", "One sec, pulling it up... "],
-    keepAlive: ["Still looking through files... ", "Almost found it... ", "One more moment... "],
+  browser: {
+    keywords: ['browser', 'open', 'website', 'url', 'link', 'page', 'tab', 'chrome'],
+    initial: ["Opening that up... ", "Let me pull that page... ", "On it... "],
+    keepAlive: ["Still loading... ", "Almost there... "],
   },
   memory: {
-    keywords: ['remember', 'last time', 'did i', 'have i', 'history', 'before', 'earlier', 'yesterday'],
+    keywords: ['remember', 'last time', 'did i', 'have i', 'history', 'before', 'earlier', 'yesterday', 'forgot'],
     initial: ["Let me think back... ", "Checking my memory... ", "Let me recall... "],
-    keepAlive: ["Still going through our history... ", "Looking further back... ", "Almost there... "],
+    keepAlive: ["Going through our history... ", "Looking further back... ", "Almost there... "],
+  },
+  file: {
+    keywords: ['file', 'document', 'folder', 'download', 'upload', 'pdf', 'read this'],
+    initial: ["Grabbing that file... ", "Looking for it... ", "One sec, pulling it up... "],
+    keepAlive: ["Still looking through files... ", "Almost found it... "],
+  },
+  music: {
+    keywords: ['song', 'music', 'play', 'spotify', 'listen'],
+    initial: ["Let me find that... ", "Looking it up... "],
+    keepAlive: ["Still searching... ", "Almost there... "],
+  },
+  image: {
+    keywords: ['image', 'photo', 'picture', 'generate', 'draw', 'create an image', 'camera', 'screenshot'],
+    initial: ["Working on that visual... ", "Generating that for you... ", "Let me create that... "],
+    keepAlive: ["Still rendering... ", "Almost done with the image... ", "Coming together... "],
+  },
+  voice: {
+    keywords: ['say', 'read aloud', 'speak', 'pronounce', 'voice'],
+    initial: ["Getting that ready... ", "One moment... "],
+    keepAlive: ["Almost ready... "],
   },
   fallback: {
-    initial: [
-      "Let me think about that... ",
-      "One sec... ",
-      "Good question... ",
-      "Alright, let me work on that... ",
-      "Give me a moment... ",
-      "Hmm, let me figure this out... ",
-      "On it... ",
-    ],
-    keepAlive: [
-      "Still working on it... ",
-      "Bear with me... ",
-      "Almost there... ",
-      "Just a bit longer... ",
-      "Hang tight... ",
-    ],
+    initial: ["Let me work on that... ", "One sec... ", "On it... ", "Let me figure this out... ", "Give me a moment... ", "Hmm... ", "Alright... "],
+    keepAlive: ["Still working on it... ", "Bear with me... ", "Almost there... ", "Just a bit longer... ", "Hang tight... "],
   },
 };
 
