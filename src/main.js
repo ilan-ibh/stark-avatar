@@ -65,28 +65,68 @@ scene.add(particlePoints);
 const stateManager = new StateManager();
 const audioManager = new AudioManager();
 
-// ─── Thinking-Gap Detection ────────────────────────────────
-// When the agent stops speaking and switches to listening, track silence.
-// If mic input stays quiet for >1.2s, transition to "thinking" — the LLM
-// is processing. This fills the dead gap so the user sees
-// listening (cyan) → thinking (purple) → speaking (green) instead of
-// listening → [dead air] → speaking.
+// ─── Debounced Mode Handling ──────────────────────────────
+// ElevenLabs fires onModeChange rapidly during natural speech pauses.
+// We debounce: only commit a state change if the mode is stable for 400ms.
+// This absorbs flickering between speaking/listening during conversation.
 
-let listeningStartTime = 0;
+let pendingMode = null;
+let modeDebounceTimer = null;
+const MODE_DEBOUNCE_MS = 400;
+
+// Thinking-gap: after the user speaks and goes silent, show "thinking"
+// while the LLM processes. Track whether the user actually spoke.
+let userSpokeDuringTurn = false;
+let silenceStartTime = 0;
 let thinkingTriggered = false;
 
-audioManager.onModeChange = (mode) => {
-  if (mode === 'listening') {
-    listeningStartTime = performance.now();
-    thinkingTriggered = false;
-    stateManager.setState('listening');
-  } else if (mode === 'speaking') {
-    thinkingTriggered = false;
+// The committed visual state (what the orb is actually showing)
+let committedMode = null;
+
+function commitMode(mode) {
+  if (mode === committedMode) return;
+  committedMode = mode;
+  thinkingTriggered = false;
+
+  if (mode === 'speaking') {
+    userSpokeDuringTurn = false;
+    silenceStartTime = 0;
     stateManager.setState('speaking');
+  } else if (mode === 'listening') {
+    userSpokeDuringTurn = false;
+    silenceStartTime = 0;
+    stateManager.setState('listening');
   }
+}
+
+audioManager.onModeChange = (mode) => {
+  // If switching TO speaking, commit immediately (no lag on voice start)
+  if (mode === 'speaking') {
+    clearTimeout(modeDebounceTimer);
+    pendingMode = null;
+    commitMode('speaking');
+    return;
+  }
+
+  // For listening, debounce — wait 400ms to confirm it's not a brief pause
+  if (mode === 'listening' && committedMode === 'speaking') {
+    pendingMode = 'listening';
+    clearTimeout(modeDebounceTimer);
+    modeDebounceTimer = setTimeout(() => {
+      if (pendingMode === 'listening') {
+        commitMode('listening');
+        pendingMode = null;
+      }
+    }, MODE_DEBOUNCE_MS);
+    return;
+  }
+
+  // Default: commit directly (e.g. first mode change after connect)
+  commitMode(mode);
 };
 
 // ─── Auto-Reconnect ───────────────────────────────────────
+// Silent reconnect on unexpected drops. No alert flash unless all retries fail.
 let intentionalDisconnect = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT = 3;
@@ -94,30 +134,34 @@ const MAX_RECONNECT = 3;
 audioManager.onStatusChange = (status) => {
   if (status === 'connected') {
     reconnectAttempts = 0;
+    committedMode = 'listening';
     stateManager.setState('listening');
     updateConnectionUI(true);
   } else if (status === 'disconnected') {
     updateConnectionUI(false);
+    committedMode = null;
 
     if (intentionalDisconnect) {
       intentionalDisconnect = false;
       stateManager.setState('idle');
     } else if (reconnectAttempts < MAX_RECONNECT) {
-      // Unexpected drop — auto-reconnect with backoff
-      stateManager.setState('alert');
+      // Silent reconnect — no alert flash, just show thinking
       reconnectAttempts++;
-      const delay = Math.min(2000 * Math.pow(2, reconnectAttempts - 1), 8000);
+      stateManager.setState('thinking');
+      const delay = Math.min(1500 * Math.pow(2, reconnectAttempts - 1), 8000);
       setTimeout(async () => {
-        stateManager.setState('thinking');
         try {
           await audioManager.startConversation();
         } catch {
-          stateManager.setState('idle');
-          updateConnectionUI(false);
+          if (reconnectAttempts >= MAX_RECONNECT) {
+            stateManager.setState('alert');
+            setTimeout(() => stateManager.setState('idle'), 2000);
+          }
         }
       }, delay);
     } else {
-      stateManager.setState('idle');
+      stateManager.setState('alert');
+      setTimeout(() => stateManager.setState('idle'), 2000);
     }
   }
 };
@@ -146,9 +190,8 @@ function resetControlsTimer() {
 resetControlsTimer();
 
 function updateStatusUI(sv) {
-  if (audioManager.isActive && audioManager.agentMode) {
-    statusEl.textContent = audioManager.agentMode;
-  } else if (audioManager.isConnecting) {
+  // Always show the orb's actual visual state — it's the source of truth
+  if (audioManager.isConnecting) {
     statusEl.textContent = 'connecting';
   } else {
     statusEl.textContent = sv.label;
@@ -290,17 +333,27 @@ function animate() {
     treble: audioManager.treble,
   };
 
-  // Thinking-gap: if we've been in 'listening' for >1.2s with low mic input,
-  // the LLM is probably processing — show thinking state
-  if (
-    audioManager.agentMode === 'listening' &&
-    !thinkingTriggered &&
-    listeningStartTime > 0 &&
-    performance.now() - listeningStartTime > 1200 &&
-    audioManager.level < 0.05
-  ) {
-    thinkingTriggered = true;
-    stateManager.setState('thinking');
+  // ── Thinking-gap detection ──
+  // Only triggers when: user spoke during this listening turn → then went
+  // fully silent for 1.5s. This means the user finished their sentence and
+  // the LLM is processing. Does NOT trigger during speech pauses.
+  if (committedMode === 'listening' && !thinkingTriggered) {
+    if (audioManager.level > 0.08) {
+      // User is speaking — mark it and reset silence timer
+      userSpokeDuringTurn = true;
+      silenceStartTime = 0;
+    } else if (userSpokeDuringTurn && silenceStartTime === 0) {
+      // User just went silent — start the silence timer
+      silenceStartTime = performance.now();
+    } else if (
+      userSpokeDuringTurn &&
+      silenceStartTime > 0 &&
+      performance.now() - silenceStartTime > 1500
+    ) {
+      // Sustained silence after speech — LLM is processing
+      thinkingTriggered = true;
+      stateManager.setState('thinking');
+    }
   }
 
   updateOrb(orbUniforms, coreUniforms, atmosUniforms, sv, elapsed, audioBands);
