@@ -97,6 +97,8 @@ function commitMode(mode) {
 }
 
 audioManager.onModeChange = (mode) => {
+  console.log(`[stark] onModeChange: ${mode} (committed: ${committedMode}, thinking: ${thinkingTriggered})`);
+
   // Speaking always commits immediately — no lag on voice start
   if (mode === 'speaking') {
     clearTimeout(modeDebounceTimer);
@@ -172,21 +174,15 @@ function hideCaption() {
   captionLabelEl.textContent = '';
 }
 
-// Caption handler — logs message structure for debugging, then displays
 audioManager.onMessage = (message) => {
   try {
-    console.log('[stark] onMessage:', JSON.stringify(message)?.slice(0, 200));
-
-    // Handle both possible formats: { type, message } or { source, message }
-    const type = message?.type || message?.source;
-    const text = message?.message || (typeof message === 'string' ? message : null);
+    const source = message?.source || message?.type || '';
+    const role = message?.role || '';
+    const text = message?.message;
     if (!text || typeof text !== 'string') return;
 
-    if (type === 'user_transcript' || type === 'user') {
-      showCaption('YOU', text, true);
-    } else if (type === 'agent_response' || type === 'agent_response_correction' || type === 'agent') {
-      showCaption('STARK', text, false);
-    }
+    const isUser = source === 'user' || role === 'user' || source === 'user_transcript';
+    showCaption(isUser ? 'YOU' : 'STARK', text, isUser);
   } catch {
     // Never let caption errors affect the conversation
   }
