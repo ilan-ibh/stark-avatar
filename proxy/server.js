@@ -11,14 +11,13 @@
  *                            if a new request arrives, the old one closes
  *                            cleanly (nothing was sent) and timer resets
  *   4. DEDUP CHECK        → if we recently answered this exact message, replay
- *   5. KEEP-ALIVE (10s)   → periodic filler during long tool calls so
+ *   5. BUFFER PHRASE      → contextual filler sent AFTER debounce settles
+ *                            (safe — no competing streams at this point)
+ *   6. KEEP-ALIVE (10s)   → periodic filler during long tool calls so
  *                            ElevenLabs doesn't hit the 15s cascade timeout
- *   6. FETCH → OPENCLAW   → SSE stream
- *   7. STREAM THROUGH     → pipe LLM chunks verbatim to ElevenLabs
- *   8. DONE               → cache response, clean up, close stream
- *
- * No initial buffer phrase — the LLM speaks first naturally.
- * The orb shows "thinking" state during the 3-5s TTFT gap.
+ *   7. FETCH → OPENCLAW   → SSE stream
+ *   8. STREAM THROUGH     → pipe LLM chunks verbatim to ElevenLabs
+ *   9. DONE               → cache response, clean up, close stream
  */
 
 import express from "express";
@@ -340,12 +339,18 @@ app.post(
       return;
     }
 
-    // ── 5. Start streaming ──
+    // ── 5. Start streaming + buffer phrase ──
     sseHeaders(res);
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
 
     const phrases = getContextualPhrases(userText);
+
+    // Buffer phrase — safe to send here because the debounce already
+    // settled (no more speculative turns). This is the only stream.
+    res.write(sseChunk(`chatcmpl-buf-${Date.now()}`, phrases.initial));
+    if (typeof res.flush === "function") res.flush();
+    console.log(`[proxy] buffer: "${phrases.initial.trim()}"`);
 
     const controller = new AbortController();
     inFlight.set(sessionId, { controller, userText });
@@ -356,8 +361,6 @@ app.post(
     let lastChunkTime = Date.now();
 
     // ── 6. Keep-alive timer (for long tool calls only) ──
-    // Sends filler phrases every 10s so ElevenLabs doesn't hit the
-    // 15s cascade timeout. No initial buffer — let the LLM speak first.
     let keepAliveIdx = 0;
     const keepAliveTimer = setInterval(() => {
       if (Date.now() - lastChunkTime > KEEPALIVE_INTERVAL_MS - 1000) {
