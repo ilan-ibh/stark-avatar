@@ -11,14 +11,14 @@
  *                            if a new request arrives, the old one closes
  *                            cleanly (nothing was sent) and timer resets
  *   4. DEDUP CHECK        → if we recently answered this exact message, replay
- *   5. BUFFER PHRASE      → contextual filler based on user's query, spoken
- *                            by TTS while the LLM processes
- *   6. KEEP-ALIVE (10s)   → periodic filler during long tool calls so
+ *   5. KEEP-ALIVE (10s)   → periodic filler during long tool calls so
  *                            ElevenLabs doesn't hit the 15s cascade timeout
- *   7. FETCH → OPENCLAW   → SSE stream; first real chunk is held until 2.5s
- *                            after buffer was sent (so TTS finishes the buffer)
- *   8. STREAM THROUGH     → pipe LLM chunks verbatim to ElevenLabs
- *   9. DONE               → cache response, clean up, close stream
+ *   6. FETCH → OPENCLAW   → SSE stream
+ *   7. STREAM THROUGH     → pipe LLM chunks verbatim to ElevenLabs
+ *   8. DONE               → cache response, clean up, close stream
+ *
+ * No initial buffer phrase — the LLM speaks first naturally.
+ * The orb shows "thinking" state during the 3-5s TTFT gap.
  */
 
 import express from "express";
@@ -34,7 +34,6 @@ const OPENCLAW_AGENT = process.env.OPENCLAW_AGENT || "main";
 const VOICE_HINT = " [Voice call — keep response under 3-4 sentences. Do NOT start with filler like 'Let me check' or 'Sure thing' — jump straight to the answer.]";
 const DEBOUNCE_MS = 1500;
 const KEEPALIVE_INTERVAL_MS = 10000;
-const MIN_BUFFER_SPEECH_MS = 2500; // minimum time for buffer phrase to finish speaking
 const DEDUP_WINDOW_MS = 15000;
 const MAX_CONVERSATIONS = 50; // cap stored conversations
 
@@ -325,26 +324,24 @@ app.post(
       return;
     }
 
-    // ── 5. Send buffer phrase ──
+    // ── 5. Start streaming ──
     sseHeaders(res);
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
 
     const phrases = getContextualPhrases(userText);
-    const buffer = phrases.initial;
-    res.write(sseChunk(`chatcmpl-buf-${Date.now()}`, buffer));
-    if (typeof res.flush === "function") res.flush();
-    console.log(`[proxy] buffer: "${buffer.trim()}"`);
 
     const controller = new AbortController();
     inFlight.set(sessionId, { controller, userText });
 
     const start = Date.now();
-    let llmContent = ""; // only the LLM's actual response (not buffer/keep-alive)
+    let llmContent = "";
     let firstChunkMs = 0;
     let lastChunkTime = Date.now();
 
-    // ── 6. Keep-alive timer (starts before fetch) ──
+    // ── 6. Keep-alive timer (for long tool calls only) ──
+    // Sends filler phrases every 10s so ElevenLabs doesn't hit the
+    // 15s cascade timeout. No initial buffer — let the LLM speak first.
     let keepAliveIdx = 0;
     const keepAliveTimer = setInterval(() => {
       if (Date.now() - lastChunkTime > KEEPALIVE_INTERVAL_MS - 1000) {
@@ -405,14 +402,7 @@ app.post(
             const chunk = JSON.parse(payload);
             const content = chunk.choices?.[0]?.delta?.content;
             if (content) {
-              // Smart hold: ensure buffer phrase has finished speaking
-              if (!firstChunkMs) {
-                firstChunkMs = Date.now() - start;
-                const elapsed = Date.now() - lastChunkTime;
-                if (elapsed < MIN_BUFFER_SPEECH_MS) {
-                  await new Promise((r) => setTimeout(r, MIN_BUFFER_SPEECH_MS - elapsed));
-                }
-              }
+              if (!firstChunkMs) firstChunkMs = Date.now() - start;
               llmContent += content;
               lastChunkTime = Date.now();
             }
