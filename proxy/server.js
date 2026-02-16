@@ -27,7 +27,7 @@ import { createServer } from "http";
 const PORT = process.env.PORT || 8013;
 const OPENCLAW_URL = process.env.OPENCLAW_URL || "http://127.0.0.1:18789/v1/chat/completions";
 const OPENCLAW_TOKEN = process.env.OPENCLAW_TOKEN || "25b8d60afe0d8fa0141d833affca1b023d45d9f45d174e86";
-const OPENCLAW_AGENT = process.env.OPENCLAW_AGENT || "main";
+const OPENCLAW_AGENT = process.env.OPENCLAW_AGENT || "voice";
 
 const VOICE_HINT = " [Voice call — keep response under 3-4 sentences. Start with the answer directly.]";
 const DEBOUNCE_MS = 1500;
