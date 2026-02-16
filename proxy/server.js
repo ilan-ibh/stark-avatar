@@ -349,10 +349,13 @@ app.post(
 
     const phrases = getContextualPhrases(userText);
 
-    // Buffer phrase — includes role: "assistant" so ElevenLabs treats it
-    // as the start of the response. OpenClaw's first chunk will have its
-    // role stripped so ElevenLabs sees it as continuation, not a new response.
-    res.write(sseChunk(`chatcmpl-buf-${Date.now()}`, phrases.initial, true));
+    // Use ONE consistent id for ALL chunks in this response (buffer +
+    // keep-alive + LLM). ElevenLabs groups chunks by id — different ids
+    // are treated as different responses, causing the buffer to be cut.
+    const responseId = `chatcmpl-${Date.now()}`;
+
+    // Buffer phrase — first chunk of the unified response
+    res.write(sseChunk(responseId, phrases.initial, true));
     if (typeof res.flush === "function") res.flush();
     console.log(`[proxy] buffer: "${phrases.initial.trim()}"`);
 
@@ -362,7 +365,6 @@ app.post(
     const start = Date.now();
     let llmContent = "";
     let firstChunkMs = 0;
-    let roleStripped = false; // strip role from first OpenClaw chunk
     let lastChunkTime = Date.now();
 
     // ── 6. Keep-alive timer (for long tool calls only) ──
@@ -372,7 +374,7 @@ app.post(
         const phrase = phrases.keepAlive[keepAliveIdx % phrases.keepAlive.length];
         keepAliveIdx++;
         try {
-          res.write(sseChunk(`chatcmpl-keepalive-${Date.now()}`, phrase));
+          res.write(sseChunk(responseId, phrase));
           if (typeof res.flush === "function") res.flush();
           lastChunkTime = Date.now();
           console.log(`[proxy] keep-alive: "${phrase.trim()}"`);
@@ -424,11 +426,11 @@ app.post(
 
           try {
             const chunk = JSON.parse(payload);
-            // Strip role from first chunk so ElevenLabs doesn't treat
-            // it as a new response (our buffer already claimed that role)
-            if (!roleStripped && chunk.choices?.[0]?.delta?.role) {
+            // Rewrite every chunk to use our unified response id and
+            // strip role — ElevenLabs sees one continuous response
+            chunk.id = responseId;
+            if (chunk.choices?.[0]?.delta?.role) {
               delete chunk.choices[0].delta.role;
-              roleStripped = true;
             }
             const content = chunk.choices?.[0]?.delta?.content;
             if (content) {
