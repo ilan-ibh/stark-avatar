@@ -1,23 +1,22 @@
 /**
- * Stark Voice Proxy v11
+ * Stark Voice Proxy v12
  *
  * Bridges ElevenLabs Conversational AI ↔ OpenClaw Gateway.
+ * Pure streaming passthrough — no buffer injection.
  *
  * Request lifecycle:
  *
  *   1. SILENCE FILTER     → "..." or empty → return [DONE] immediately
  *   2. ABORT IN-FLIGHT    → cancel any pending fetch for this session
  *   3. DEBOUNCE (1.5s)    → wait for speculative turn to settle;
- *                            if a new request arrives, the old one closes
- *                            cleanly (nothing was sent) and timer resets
+ *                            keeps the LONGEST message (handles corrections)
  *   4. DEDUP CHECK        → if we recently answered this exact message, replay
- *   5. BUFFER PHRASE      → contextual filler sent AFTER debounce settles
- *                            (safe — no competing streams at this point)
- *   6. KEEP-ALIVE (10s)   → periodic filler during long tool calls so
- *                            ElevenLabs doesn't hit the 15s cascade timeout
- *   7. FETCH → OPENCLAW   → SSE stream
- *   8. STREAM THROUGH     → pipe LLM chunks verbatim to ElevenLabs
- *   9. DONE               → cache response, clean up, close stream
+ *   5. FETCH → OPENCLAW   → SSE stream with keep-alive for tool calls
+ *   6. STREAM THROUGH     → pipe LLM chunks verbatim to ElevenLabs
+ *   7. DONE               → cache response, clean up, close stream
+ *
+ * The orb shows "thinking" state during the LLM processing gap.
+ * Keep-alive phrases prevent the 15s cascade timeout on long tool calls.
  */
 
 import express from "express";
@@ -30,139 +29,28 @@ const OPENCLAW_URL = process.env.OPENCLAW_URL || "http://127.0.0.1:18789/v1/chat
 const OPENCLAW_TOKEN = process.env.OPENCLAW_TOKEN || "25b8d60afe0d8fa0141d833affca1b023d45d9f45d174e86";
 const OPENCLAW_AGENT = process.env.OPENCLAW_AGENT || "main";
 
-const VOICE_HINT = " [Voice call — keep response under 3-4 sentences. Do NOT start with filler like 'Let me check' or 'Sure thing' — jump straight to the answer.]";
+const VOICE_HINT = " [Voice call — keep response under 3-4 sentences. Start with the answer directly.]";
 const DEBOUNCE_MS = 1500;
 const KEEPALIVE_INTERVAL_MS = 10000;
 const DEDUP_WINDOW_MS = 15000;
-const MAX_CONVERSATIONS = 50; // cap stored conversations
+const MAX_CONVERSATIONS = 50;
 
-// ─── Contextual Buffer Phrases ─────────────────────────────
-// Matched to the user's query by keyword. Initial phrase plays immediately.
-// Keep-alive phrases play every 10s during long tool calls.
-// All phrases end with trailing space per ElevenLabs docs.
+// ─── Keep-Alive Phrases (tool calls only) ──────────────────
+// Used when OpenClaw runs tool calls that take >10s.
+// Prevents ElevenLabs from hitting the 15s cascade timeout.
 
-const PHRASE_CATEGORIES = {
-  email: {
-    keywords: ["email", "inbox", "mail", "unread", "send an email", "reply to"],
-    initial: ["Checking your inbox... ", "Pulling up your emails... ", "Let me look at your mail... "],
-    keepAlive: ["Going through your emails... ", "Still reading through them... ", "Almost done checking... "],
-  },
-  calendar: {
-    keywords: ["calendar", "schedule", "meeting", "appointment", "event", "free time", "busy", "availability"],
-    initial: ["Checking your schedule... ", "Pulling up your calendar... ", "Looking at your agenda... "],
-    keepAlive: ["Going through your events... ", "Checking the details... ", "One moment, still looking... "],
-  },
-  weather: {
-    keywords: ["weather", "forecast", "temperature", "rain", "sunny", "cold", "hot outside"],
-    initial: ["Checking the forecast... ", "Let me look at the weather... "],
-    keepAlive: ["Still pulling the data... ", "Almost there... "],
-  },
-  whatsapp: {
-    keywords: ["whatsapp", "whats app"],
-    initial: ["Checking your WhatsApp... ", "Pulling up your chats... ", "Let me look at your messages... "],
-    keepAlive: ["Going through your conversations... ", "Still reading... ", "Almost done... "],
-  },
-  messaging: {
-    keywords: ["message", "messages", "telegram", "slack", "discord", "notification", "notifications", "dm", "chat"],
-    initial: ["Checking your messages... ", "Let me pull those up... ", "Looking at your notifications... "],
-    keepAlive: ["Going through them... ", "Still reading... ", "Almost done... "],
-  },
-  twitter: {
-    keywords: ["twitter", "tweet", "x.com", "timeline", "trending", "post on x"],
-    initial: ["Checking your timeline... ", "Pulling up X... ", "Let me look at that... "],
-    keepAlive: ["Going through the feed... ", "Still looking... ", "Almost there... "],
-  },
-  tasks: {
-    keywords: ["task", "tasks", "todo", "to-do", "things", "reminder", "reminders", "due"],
-    initial: ["Checking your tasks... ", "Pulling up your to-dos... ", "Let me look at that... "],
-    keepAlive: ["Going through your list... ", "Still checking... ", "Almost done... "],
-  },
-  health: {
-    keywords: ["health", "whoop", "sleep", "recovery", "heart rate", "hrv", "strain", "workout", "steps", "fitness"],
-    initial: ["Checking your health data... ", "Pulling up your stats... ", "Let me look at your recovery... "],
-    keepAlive: ["Going through the data... ", "Still pulling your metrics... ", "Almost there... "],
-  },
-  crypto: {
-    keywords: ["crypto", "bitcoin", "btc", "ethereum", "eth", "hyperliquid", "portfolio", "position", "pnl", "trading", "price"],
-    initial: ["Checking the markets... ", "Pulling up your positions... ", "Looking at the numbers... "],
-    keepAlive: ["Still crunching the data... ", "Going through your portfolio... ", "Almost done... "],
-  },
-  search: {
-    keywords: ["search", "look up", "find", "google", "what is", "who is", "look for", "research"],
-    initial: ["Let me look that up... ", "Searching for that... ", "Let me find out... "],
-    keepAlive: ["Still searching... ", "Going through the results... ", "Almost there... "],
-  },
-  code: {
-    keywords: ["code", "bug", "error", "deploy", "build", "commit", "repo", "pull request", "github", "merge"],
-    initial: ["Looking into that... ", "Checking the repo... ", "Let me pull that up... "],
-    keepAlive: ["Still going through the code... ", "Digging into the details... ", "Almost got it... "],
-  },
-  notes: {
-    keywords: ["note", "notes", "write down", "jot", "obsidian", "save this", "log this"],
-    initial: ["On it... ", "Writing that down... ", "Let me save that... "],
-    keepAlive: ["Still working on it... ", "Almost done... "],
-  },
-  browser: {
-    keywords: ["browser", "open", "website", "url", "link", "page", "tab", "chrome"],
-    initial: ["Opening that up... ", "Let me pull that page... ", "On it... "],
-    keepAlive: ["Still loading... ", "Almost there... "],
-  },
-  memory: {
-    keywords: ["remember", "last time", "did i", "have i", "history", "before", "earlier", "yesterday", "forgot"],
-    initial: ["Let me think back... ", "Checking my memory... ", "Let me recall... "],
-    keepAlive: ["Going through our history... ", "Looking further back... ", "Almost there... "],
-  },
-  file: {
-    keywords: ["file", "document", "folder", "download", "upload", "pdf", "read this"],
-    initial: ["Grabbing that file... ", "Looking for it... ", "One sec, pulling it up... "],
-    keepAlive: ["Still looking through files... ", "Almost found it... "],
-  },
-  music: {
-    keywords: ["song", "music", "play", "spotify", "listen"],
-    initial: ["Let me find that... ", "Looking it up... "],
-    keepAlive: ["Still searching... ", "Almost there... "],
-  },
-  image: {
-    keywords: ["image", "photo", "picture", "generate", "draw", "create an image", "camera", "screenshot"],
-    initial: ["Working on that visual... ", "Generating that for you... ", "Let me create that... "],
-    keepAlive: ["Still rendering... ", "Almost done with the image... ", "Coming together... "],
-  },
-  voice: {
-    keywords: ["say", "read aloud", "speak", "pronounce", "voice"],
-    initial: ["Getting that ready... ", "One moment... "],
-    keepAlive: ["Almost ready... "],
-  },
-  fallback: {
-    initial: ["Let me work on that... ", "One sec... ", "On it... ", "Let me figure this out... ", "Give me a moment... ", "Hmm... ", "Alright... "],
-    keepAlive: ["Still working on it... ", "Bear with me... ", "Almost there... ", "Just a bit longer... ", "Hang tight... "],
-  },
-};
-
-function matchCategory(text) {
-  const lower = text.toLowerCase();
-  for (const [name, cat] of Object.entries(PHRASE_CATEGORIES)) {
-    if (name === "fallback") continue;
-    if (cat.keywords.some((kw) => lower.includes(kw))) return cat;
-  }
-  return PHRASE_CATEGORIES.fallback;
-}
-
-let lastInitialIdx = -1;
-
-function getContextualPhrases(userText) {
-  const cat = matchCategory(userText);
-  let idx;
-  do {
-    idx = Math.floor(Math.random() * cat.initial.length);
-  } while (idx === lastInitialIdx && cat.initial.length > 1);
-  lastInitialIdx = idx;
-  return { initial: cat.initial[idx], keepAlive: cat.keepAlive };
-}
+const KEEPALIVE_PHRASES = [
+  "Still working on it... ",
+  "Bear with me... ",
+  "Almost there... ",
+  "Just a bit longer... ",
+  "Hang tight... ",
+];
 
 // ─── State Maps ────────────────────────────────────────────
 
 const inFlight = new Map();       // sessionId → { controller, userText }
-const pendingRequests = new Map(); // sessionId → { timer, resolve, reject }
+const pendingRequests = new Map(); // sessionId → { timer, resolve, reject, textLength }
 const recentRequests = new Map();  // hash → { response, timestamp }
 const conversations = new Map();   // sessionId → { messages, startedAt }
 
@@ -185,7 +73,6 @@ function getCachedResponse(hash) {
 
 function cacheResponse(hash, response) {
   recentRequests.set(hash, { response, timestamp: Date.now() });
-  // Evict old entries
   for (const [k, v] of recentRequests) {
     if (Date.now() - v.timestamp > DEDUP_WINDOW_MS * 2) recentRequests.delete(k);
   }
@@ -196,22 +83,18 @@ function logMessage(sessionId, role, content) {
     conversations.set(sessionId, { messages: [], startedAt: new Date() });
   }
   conversations.get(sessionId).messages.push({ role, content, timestamp: new Date().toISOString() });
-  // Cap stored conversations
   if (conversations.size > MAX_CONVERSATIONS) {
     const oldest = conversations.keys().next().value;
     conversations.delete(oldest);
   }
 }
 
-function sseChunk(id, content, includeRole = false) {
-  const delta = includeRole
-    ? { role: "assistant", content }
-    : { content };
+function sseChunk(id, content) {
   return `data: ${JSON.stringify({
     id,
     object: "chat.completion.chunk",
     created: Math.floor(Date.now() / 1000),
-    choices: [{ index: 0, delta, finish_reason: null }],
+    choices: [{ index: 0, delta: { content }, finish_reason: null }],
   })}\n\n`;
 }
 
@@ -249,8 +132,6 @@ app.delete("/conversations", (_req, res) => {
 });
 
 // ─── Main Endpoint ─────────────────────────────────────────
-// ElevenLabs sends requests here. The double path handles a known
-// ElevenLabs routing quirk that sometimes doubles the path segment.
 
 app.post(
   ["/v1/chat/completions", "/v1/chat/completions/chat/completions"],
@@ -280,25 +161,19 @@ app.post(
     }
 
     // ── 3. Debounce — keep the LONGEST message ──
-    // ElevenLabs sends speculative turns (partial → complete) and sometimes
-    // corrections (complete → shorter retranscription). We always keep the
-    // longest version — it's the most complete transcript.
     if (pendingRequests.has(sessionId)) {
       const pending = pendingRequests.get(sessionId);
       clearTimeout(pending.timer);
 
       if (userText.length <= pending.textLength) {
-        // New message is shorter or equal — it's a correction, drop it
         console.log(`[proxy] debounce: drop shorter (${userText.length} <= ${pending.textLength})`);
         sseHeaders(res);
         res.write(sseChunk(`chatcmpl-superseded-${Date.now()}`, " "));
         sseDone(res);
-        // Restart timer for the existing longer request
         pending.timer = setTimeout(() => pending.resolve(), DEBOUNCE_MS);
         return;
       }
 
-      // New message is longer — supersede the old one, this one is better
       console.log(`[proxy] debounce: replace with longer (${userText.length} > ${pending.textLength})`);
       pending.reject("superseded");
       pendingRequests.delete(sessionId);
@@ -342,22 +217,10 @@ app.post(
       return;
     }
 
-    // ── 5. Start streaming + buffer phrase ──
+    // ── 5. Stream from OpenClaw ──
     sseHeaders(res);
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
-
-    const phrases = getContextualPhrases(userText);
-
-    // Use ONE consistent id for ALL chunks in this response (buffer +
-    // keep-alive + LLM). ElevenLabs groups chunks by id — different ids
-    // are treated as different responses, causing the buffer to be cut.
-    const responseId = `chatcmpl-${Date.now()}`;
-
-    // Buffer phrase — first chunk of the unified response
-    res.write(sseChunk(responseId, phrases.initial, true));
-    if (typeof res.flush === "function") res.flush();
-    console.log(`[proxy] buffer: "${phrases.initial.trim()}"`);
 
     const controller = new AbortController();
     inFlight.set(sessionId, { controller, userText });
@@ -366,31 +229,15 @@ app.post(
     let llmContent = "";
     let firstChunkMs = 0;
     let lastChunkTime = Date.now();
-    let gotFirstContent = false;
 
-    // ── 6a. Heartbeat: keep stream warm every 2s until first LLM chunk ──
-    // ElevenLabs may treat a silent stream as "response done" and finalize
-    // TTS. Sending "... " keeps the TTS session alive during the TTFT gap.
-    const HEARTBEAT_MS = 2000;
-    const heartbeatTimer = setInterval(() => {
-      if (!gotFirstContent) {
-        try {
-          res.write(sseChunk(responseId, "... "));
-          if (typeof res.flush === "function") res.flush();
-          lastChunkTime = Date.now();
-        } catch {}
-      }
-    }, HEARTBEAT_MS);
-
-    // ── 6b. Keep-alive: contextual phrases every 10s for long tool calls ──
+    // Keep-alive: prevents 15s cascade timeout during long tool calls
     let keepAliveIdx = 0;
     const keepAliveTimer = setInterval(() => {
-      if (gotFirstContent) return; // once LLM is streaming, no more filler
       if (Date.now() - lastChunkTime > KEEPALIVE_INTERVAL_MS - 1000) {
-        const phrase = phrases.keepAlive[keepAliveIdx % phrases.keepAlive.length];
+        const phrase = KEEPALIVE_PHRASES[keepAliveIdx % KEEPALIVE_PHRASES.length];
         keepAliveIdx++;
         try {
-          res.write(sseChunk(responseId, phrase));
+          res.write(sseChunk(`chatcmpl-ka-${Date.now()}`, phrase));
           if (typeof res.flush === "function") res.flush();
           lastChunkTime = Date.now();
           console.log(`[proxy] keep-alive: "${phrase.trim()}"`);
@@ -399,7 +246,6 @@ app.post(
     }, KEEPALIVE_INTERVAL_MS);
 
     try {
-      // ── 7. Fetch from OpenClaw ──
       const upstreamRes = await fetch(OPENCLAW_URL, {
         method: "POST",
         headers: {
@@ -421,7 +267,7 @@ app.post(
         return;
       }
 
-      // ── 8. Stream response through ──
+      // ── 6. Pipe LLM chunks verbatim ──
       const reader = upstreamRes.body.getReader();
       const decoder = new TextDecoder();
       let partial = "";
@@ -442,40 +288,28 @@ app.post(
 
           try {
             const chunk = JSON.parse(payload);
-            // Rewrite every chunk to use our unified response id and
-            // strip role — ElevenLabs sees one continuous response
-            chunk.id = responseId;
-            if (chunk.choices?.[0]?.delta?.role) {
-              delete chunk.choices[0].delta.role;
-            }
             const content = chunk.choices?.[0]?.delta?.content;
             if (content) {
-              if (!firstChunkMs) {
-                firstChunkMs = Date.now() - start;
-                gotFirstContent = true;
-                clearInterval(heartbeatTimer);
-              }
+              if (!firstChunkMs) firstChunkMs = Date.now() - start;
               llmContent += content;
               lastChunkTime = Date.now();
             }
-            res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+            res.write(`data: ${payload}\n\n`);
           } catch {
             res.write(`${trimmed}\n\n`);
           }
         }
       }
 
-      // ── 9. Done ──
-      clearInterval(heartbeatTimer);
+      // ── 7. Done ──
       clearInterval(keepAliveTimer);
-      cacheResponse(reqHash, llmContent); // cache only the LLM response, not filler
+      cacheResponse(reqHash, llmContent);
       logMessage(sessionId, "assistant", llmContent);
       console.log(`[proxy] done: ${llmContent.length} chars, first_chunk=${firstChunkMs}ms, total=${Date.now() - start}ms`);
       sseDone(res);
       if (inFlight.get(sessionId)?.controller === controller) inFlight.delete(sessionId);
 
     } catch (err) {
-      clearInterval(heartbeatTimer);
       clearInterval(keepAliveTimer);
       if (err.name === "AbortError") {
         console.log("[proxy] aborted (superseded)");
@@ -492,7 +326,7 @@ app.post(
 
 const server = createServer(app);
 server.listen(PORT, () => {
-  console.log(`[stark-proxy] v11 — debounce + contextual buffer + keep-alive`);
+  console.log(`[stark-proxy] v12 — clean passthrough + debounce + keep-alive`);
   console.log(`[stark-proxy] → ${OPENCLAW_URL}`);
   console.log(`[stark-proxy] agent: ${OPENCLAW_AGENT} | port: ${PORT}`);
 });
