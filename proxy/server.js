@@ -203,12 +203,15 @@ function logMessage(sessionId, role, content) {
   }
 }
 
-function sseChunk(id, content) {
+function sseChunk(id, content, includeRole = false) {
+  const delta = includeRole
+    ? { role: "assistant", content }
+    : { content };
   return `data: ${JSON.stringify({
     id,
     object: "chat.completion.chunk",
     created: Math.floor(Date.now() / 1000),
-    choices: [{ index: 0, delta: { content }, finish_reason: null }],
+    choices: [{ index: 0, delta, finish_reason: null }],
   })}\n\n`;
 }
 
@@ -346,9 +349,10 @@ app.post(
 
     const phrases = getContextualPhrases(userText);
 
-    // Buffer phrase — safe to send here because the debounce already
-    // settled (no more speculative turns). This is the only stream.
-    res.write(sseChunk(`chatcmpl-buf-${Date.now()}`, phrases.initial));
+    // Buffer phrase — includes role: "assistant" so ElevenLabs treats it
+    // as the start of the response. OpenClaw's first chunk will have its
+    // role stripped so ElevenLabs sees it as continuation, not a new response.
+    res.write(sseChunk(`chatcmpl-buf-${Date.now()}`, phrases.initial, true));
     if (typeof res.flush === "function") res.flush();
     console.log(`[proxy] buffer: "${phrases.initial.trim()}"`);
 
@@ -358,6 +362,7 @@ app.post(
     const start = Date.now();
     let llmContent = "";
     let firstChunkMs = 0;
+    let roleStripped = false; // strip role from first OpenClaw chunk
     let lastChunkTime = Date.now();
 
     // ── 6. Keep-alive timer (for long tool calls only) ──
@@ -419,13 +424,19 @@ app.post(
 
           try {
             const chunk = JSON.parse(payload);
+            // Strip role from first chunk so ElevenLabs doesn't treat
+            // it as a new response (our buffer already claimed that role)
+            if (!roleStripped && chunk.choices?.[0]?.delta?.role) {
+              delete chunk.choices[0].delta.role;
+              roleStripped = true;
+            }
             const content = chunk.choices?.[0]?.delta?.content;
             if (content) {
               if (!firstChunkMs) firstChunkMs = Date.now() - start;
               llmContent += content;
               lastChunkTime = Date.now();
             }
-            res.write(`data: ${payload}\n\n`);
+            res.write(`data: ${JSON.stringify(chunk)}\n\n`);
           } catch {
             res.write(`${trimmed}\n\n`);
           }
