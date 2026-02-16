@@ -277,10 +277,27 @@ app.post(
       inFlight.delete(sessionId);
     }
 
-    // ── 3. Debounce — wait for speculative turn to settle ──
+    // ── 3. Debounce — keep the LONGEST message ──
+    // ElevenLabs sends speculative turns (partial → complete) and sometimes
+    // corrections (complete → shorter retranscription). We always keep the
+    // longest version — it's the most complete transcript.
     if (pendingRequests.has(sessionId)) {
       const pending = pendingRequests.get(sessionId);
       clearTimeout(pending.timer);
+
+      if (userText.length <= pending.textLength) {
+        // New message is shorter or equal — it's a correction, drop it
+        console.log(`[proxy] debounce: drop shorter (${userText.length} <= ${pending.textLength})`);
+        sseHeaders(res);
+        res.write(sseChunk(`chatcmpl-superseded-${Date.now()}`, " "));
+        sseDone(res);
+        // Restart timer for the existing longer request
+        pending.timer = setTimeout(() => pending.resolve(), DEBOUNCE_MS);
+        return;
+      }
+
+      // New message is longer — supersede the old one, this one is better
+      console.log(`[proxy] debounce: replace with longer (${userText.length} > ${pending.textLength})`);
       pending.reject("superseded");
       pendingRequests.delete(sessionId);
     }
@@ -289,7 +306,7 @@ app.post(
     try {
       await new Promise((resolve, reject) => {
         const timer = setTimeout(resolve, DEBOUNCE_MS);
-        pendingRequests.set(sessionId, { timer, resolve, reject });
+        pendingRequests.set(sessionId, { timer, resolve, reject, textLength: userText.length });
       });
       pendingRequests.delete(sessionId);
     } catch {
@@ -298,7 +315,6 @@ app.post(
     }
 
     if (superseded) {
-      console.log(`[proxy] debounce: superseded`);
       sseHeaders(res);
       res.write(sseChunk(`chatcmpl-superseded-${Date.now()}`, " "));
       sseDone(res);
