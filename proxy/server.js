@@ -366,10 +366,26 @@ app.post(
     let llmContent = "";
     let firstChunkMs = 0;
     let lastChunkTime = Date.now();
+    let gotFirstContent = false;
 
-    // ── 6. Keep-alive timer (for long tool calls only) ──
+    // ── 6a. Heartbeat: keep stream warm every 2s until first LLM chunk ──
+    // ElevenLabs may treat a silent stream as "response done" and finalize
+    // TTS. Sending "... " keeps the TTS session alive during the TTFT gap.
+    const HEARTBEAT_MS = 2000;
+    const heartbeatTimer = setInterval(() => {
+      if (!gotFirstContent) {
+        try {
+          res.write(sseChunk(responseId, "... "));
+          if (typeof res.flush === "function") res.flush();
+          lastChunkTime = Date.now();
+        } catch {}
+      }
+    }, HEARTBEAT_MS);
+
+    // ── 6b. Keep-alive: contextual phrases every 10s for long tool calls ──
     let keepAliveIdx = 0;
     const keepAliveTimer = setInterval(() => {
+      if (gotFirstContent) return; // once LLM is streaming, no more filler
       if (Date.now() - lastChunkTime > KEEPALIVE_INTERVAL_MS - 1000) {
         const phrase = phrases.keepAlive[keepAliveIdx % phrases.keepAlive.length];
         keepAliveIdx++;
@@ -434,7 +450,11 @@ app.post(
             }
             const content = chunk.choices?.[0]?.delta?.content;
             if (content) {
-              if (!firstChunkMs) firstChunkMs = Date.now() - start;
+              if (!firstChunkMs) {
+                firstChunkMs = Date.now() - start;
+                gotFirstContent = true;
+                clearInterval(heartbeatTimer);
+              }
               llmContent += content;
               lastChunkTime = Date.now();
             }
@@ -446,6 +466,7 @@ app.post(
       }
 
       // ── 9. Done ──
+      clearInterval(heartbeatTimer);
       clearInterval(keepAliveTimer);
       cacheResponse(reqHash, llmContent); // cache only the LLM response, not filler
       logMessage(sessionId, "assistant", llmContent);
@@ -454,6 +475,7 @@ app.post(
       if (inFlight.get(sessionId)?.controller === controller) inFlight.delete(sessionId);
 
     } catch (err) {
+      clearInterval(heartbeatTimer);
       clearInterval(keepAliveTimer);
       if (err.name === "AbortError") {
         console.log("[proxy] aborted (superseded)");
