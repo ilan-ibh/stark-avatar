@@ -137,6 +137,20 @@ Planned:
 - Multiple visualization modes
 - Screensaver mode for extended idle
 
+## OpenClaw Integration
+
+The `proxy/server.js` bridges ElevenLabs Conversational AI to [OpenClaw](https://github.com/nichochar/openclaw), making the orb a voice interface for your OpenClaw agent. The proxy handles debouncing, dedup, and keep-alive to deal with real-time voice latency constraints.
+
+**Three modes:**
+
+| Mode | Description |
+|------|-------------|
+| **Standalone** | Orb + ElevenLabs only. No proxy needed — ElevenLabs handles the LLM. |
+| **With OpenClaw** | Proxy bridges ElevenLabs → OpenClaw. Your agent is the brain. |
+| **With any agent** | Proxy works with any OpenAI-compatible `/v1/chat/completions` endpoint. |
+
+See [`openclaw/`](./openclaw/) for setup instructions, example config, and environment variables.
+
 ## License
 
 MIT
